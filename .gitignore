@@ -1,0 +1,41 @@
+# Ignore every local environment/secret variant while retaining the sanitized template.
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+backend/.venv/
+backend/dist/
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+
+# IDE and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Runtime financial data (keep directory placeholders only)
+runtime/**
+!runtime/.gitkeep
+!runtime/parquet/
+runtime/parquet/**
+!runtime/parquet/.gitkeep
+!runtime/exports/
+runtime/exports/**
+!runtime/exports/.gitkeep
+
+# Logs and local artifacts
+*.log
+coverage.xml
+htmlcov/

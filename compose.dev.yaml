@@ -1,0 +1,31 @@
+services:
+  backend:
+    build:
+      target: development
+    command:
+      - /bin/sh
+      - -c
+      - alembic upgrade head && exec uvicorn a_stock_lab.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ./backend/src:/app/src
+      - ./backend/alembic:/app/alembic
+      - ./backend/alembic.ini:/app/alembic.ini:ro
+      - ./runtime:/app/runtime
+
+  frontend:
+    build:
+      target: development
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+      VITE_BASE_PATH: /
+    volumes:
+      - ./frontend:/app
+      - frontend-node-modules:/app/node_modules
+    ports: !override
+      - "5173:5173"
+    healthcheck:
+      disable: true
+
+volumes:
+  frontend-node-modules:
+
