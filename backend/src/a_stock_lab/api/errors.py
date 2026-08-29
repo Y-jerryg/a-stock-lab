@@ -1,6 +1,7 @@
 from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -39,7 +40,8 @@ class ApplicationError(Exception):
 def _error_response(
     *, status_code: int, code: str, message: str, details: Any | None = None
 ) -> JSONResponse:
-    envelope = ErrorEnvelope(error=ErrorBody(code=code, message=message, details=details))
+    safe_details = jsonable_encoder(details) if details is not None else None
+    envelope = ErrorEnvelope(error=ErrorBody(code=code, message=message, details=safe_details))
     return JSONResponse(status_code=status_code, content=envelope.model_dump(mode="json"))
 
 

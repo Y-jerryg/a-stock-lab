@@ -13,3 +13,8 @@ def require_aware(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("timestamp must be timezone-aware")
     return value
+
+
+def as_market_timezone(value: datetime) -> datetime:
+    """Validate and normalize an aware timestamp to the canonical market timezone."""
+    return require_aware(value).astimezone(MARKET_TIME_ZONE)

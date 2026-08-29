@@ -1,9 +1,10 @@
 # A-Stock Lab
 
-A-Stock Lab is a production-oriented personal A-share market research platform. Phase 0 establishes
+A-Stock Lab is a production-oriented personal A-share market research platform. Phase 0 established
 the modular monolith, database contracts, runtime, observability, frontend shell, and delivery
-tooling. It deliberately contains no market-data providers, trading rules, AI calls, or simulated
-financial results.
+tooling. Phase 1 adds provider-neutral market-data infrastructure, an isolated AKShare adapter,
+quality-gated full-market snapshots, and opt-in Parquet diagnostics. It deliberately contains no
+Tail Radar screening, trading rules, AI calls, or simulated financial results.
 
 ## Modules
 
@@ -81,6 +82,24 @@ uv run alembic downgrade -1
 
 Every schema change must include and review an Alembic migration. Containers apply committed
 migrations on startup only after PostgreSQL reports healthy.
+
+## Manual live market-data diagnostic
+
+The live diagnostic is intentionally not part of tests or CI. It makes a real AKShare/Eastmoney
+request and does not persist anything unless `--persist` is supplied:
+
+```powershell
+Set-Location backend
+uv sync --locked
+uv run market-data-diagnostic
+uv run market-data-diagnostic --repeat 3 --interval-seconds 120
+uv run market-data-diagnostic --persist
+```
+
+Successful and failed observations are emitted as JSON, including request timing, latency, record
+count, quality metrics, and normalized samples. Persisted snapshots are written below
+`runtime/market-data/`, which is ignored by Git. See [market-data documentation](docs/market-data.md)
+for the contract, thresholds, failure semantics, and storage layout.
 
 ## Quality commands
 

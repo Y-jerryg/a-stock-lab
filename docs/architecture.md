@@ -11,9 +11,10 @@ flowchart LR
   Browser["React static frontend"] -->|"public read API /api/v1"| API["FastAPI modular monolith"]
   API --> Features["Feature application layers"]
   Features --> Shared["ResearchArtifact + ExecutionRun"]
-  Features --> Adapters["Provider adapters"]
+  Features --> MarketData["MarketDataProvider + quality gate"]
+  MarketData --> Adapters["Provider adapters"]
   Shared --> Postgres[(PostgreSQL)]
-  Adapters -. "future bulk datasets" .-> Parquet[(Runtime Parquet)]
+  MarketData -. "validated snapshots" .-> Parquet[(Runtime Parquet)]
   Internal["Future authenticated operations"] -.->|"separate internal boundary"| API
 ```
 
@@ -27,11 +28,18 @@ flowchart LR
   integrations.
 - `shared/artifacts` is the versioned cross-module research output contract.
 - `shared/execution` records auditable job lifecycle and implementation/provider context.
+- `shared/market_data` contains provider-neutral market-data models, contracts, acceptance rules,
+  and orchestration. Concrete SDK and Parquet code lives only in its `adapters` package; neutral
+  modules never import those adapters.
 - `database` owns SQLAlchemy metadata and sessions. Alembic is the only schema evolution mechanism.
 
 Expensive actions such as market refreshes, OpenAI calls, quantitative runs, and Tail Radar execution
 must not be added as anonymous public actions. Authentication is intentionally deferred; therefore
 the operational router is not mounted.
+
+The Phase 1 live snapshot path is an explicitly invoked diagnostic rather than an API route or
+scheduler. This keeps network work out of request handling and prevents accidental polling while
+provider reliability is being measured.
 
 ## Frontend boundaries
 
@@ -54,4 +62,3 @@ information from entering historical analysis.
 The backend emits JSON logs to standard output. Request middleware supplies `request_id`; run
 orchestration can attach `run_id`, while feature and provider context are structured log fields.
 Secrets and raw credentials must never be logged.
-

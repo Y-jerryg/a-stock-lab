@@ -16,15 +16,18 @@ Artifact type names are namespaced (for example `tail_radar.stock_analysis`) and
 must select a supported `schema_version`. The schema remains flexible without sacrificing indexed,
 auditable envelope fields.
 
-## Parquet: future large immutable datasets
+## Parquet: large immutable datasets
 
-Full-market snapshots, historical bars, and large quantitative datasets will use Parquet under the
-configured runtime data directory. Those files are not implemented in Phase 0 and are always ignored
-by Git. Containers bind-mount `runtime/`, so future data does not exist only in disposable layers.
+Accepted full-market snapshots use Parquet under `runtime/market-data/<fetch-date>/`. Each file has
+a stable typed record schema and embeds its snapshot manifest as Parquet metadata. Files are written
+through an atomic same-directory replacement and are always ignored by Git. Containers bind-mount
+`runtime/`, so data does not exist only in disposable layers. Historical bars and large quantitative
+datasets will follow the same immutable-data principle in later phases.
 
-Future dataset manifests should live in PostgreSQL and record provider, content identity, time range,
-schema version, creation time, and path. This preserves discoverability and provenance while keeping
-large analytical scans out of transactional tables.
+The Phase 1 diagnostic embeds its manifest in each Parquet file. A future scheduled ingestion
+workflow should additionally register dataset manifests in PostgreSQL with provider, content
+identity, time range, schema version, row count, creation time, storage location, and quality status.
+Bulk records should not be duplicated into PostgreSQL by default.
 
 ## Integrity rules
 
@@ -35,6 +38,5 @@ large analytical scans out of transactional tables.
 - Database changes require reviewed Alembic migrations.
 - Runtime data and credentials are never committed.
 
-Vector stores, embeddings, semantic retrieval, market-data persistence, and provider integrations are
-explicitly deferred.
-
+Vector stores, embeddings, and semantic retrieval remain deliberately deferred. Provider expansion
+and scheduled ingestion require evidence from live diagnostics before adoption.

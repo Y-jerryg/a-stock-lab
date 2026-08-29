@@ -5,5 +5,4 @@ __pycache__
 .ruff_cache
 tests
 *.log
-.env
-
+.env*

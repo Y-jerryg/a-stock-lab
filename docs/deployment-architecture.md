@@ -1,6 +1,6 @@
 # Deployment architecture
 
-Phase 0 defines deployable boundaries but does not deploy them.
+Phases 0 and 1 define deployable boundaries but do not deploy them.
 
 ## Frontend
 
@@ -27,8 +27,11 @@ No queue or worker service exists yet.
 
 PostgreSQL requires managed backups, point-in-time recovery, encrypted connections, and restricted
 network access in a real deployment. Schema migrations should run as an explicit release step before
-new application instances receive traffic. Large future Parquet datasets require durable object or
-filesystem storage plus PostgreSQL manifests.
+new application instances receive traffic. The manual market-data diagnostic writes accepted
+snapshots to the configured runtime filesystem. Local Compose bind-mounts that directory; a real
+deployment requires durable filesystem or object storage before persisted diagnostics can be relied
+upon across instance replacement. PostgreSQL dataset-manifest registration remains future work for
+scheduled ingestion.
 
 In local Compose, `POSTGRES_HOST_PORT` controls only the Windows-facing debugging port. The database
 container continues listening on 5432, and backend containers connect through `postgres:5432` on the
@@ -41,4 +44,4 @@ belong behind authentication and authorization on a separate internal boundary. 
 browser control, not authentication.
 
 No cloud provider, monitoring vendor, domain, TLS termination, authentication system, or production
-data retention policy is selected in Phase 0.
+data retention policy is selected through Phase 1.

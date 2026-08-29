@@ -27,6 +27,15 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     market_data_api_key: str | None = None
     runtime_data_dir: Path = Path("../runtime")
+    market_data_retry_attempts: int = Field(default=2, ge=1, le=3)
+    market_data_retry_delay_seconds: float = Field(default=5.0, ge=0, le=60)
+    market_snapshot_min_records: int = Field(default=4_000, ge=1)
+    market_snapshot_max_duplicate_symbols: int = Field(default=0, ge=0)
+    market_snapshot_max_missing_symbol_ratio: float = Field(default=0.001, ge=0, le=1)
+    market_snapshot_max_invalid_price_ratio: float = Field(default=0.005, ge=0, le=1)
+    market_snapshot_max_invalid_pct_change_ratio: float = Field(default=0.005, ge=0, le=1)
+    market_snapshot_max_malformed_row_ratio: float = Field(default=0.01, ge=0, le=1)
+    market_snapshot_max_abs_pct_change: float = Field(default=1_000.0, gt=0)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
     @field_validator("database_url", mode="before")

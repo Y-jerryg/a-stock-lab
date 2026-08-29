@@ -79,6 +79,20 @@ Never place credentials in `VITE_*`; Vite variables are public build output.
 Backend gates are Ruff formatting/lint, strict mypy, and pytest. Frontend gates are ESLint, strict
 TypeScript, Prettier, Vitest, and a production Vite build. CI also builds both runtime images.
 
+## Manual market-data diagnostic
+
+Normal tests mock the provider and never use the internet. To make one explicit live observation:
+
+```powershell
+Set-Location backend
+uv run market-data-diagnostic
+```
+
+Use `--repeat 3 --interval-seconds 120` to collect latency/success/count observations. Repeated calls
+enforce a minimum 30-second interval. Use `--persist` only when a validated Parquet snapshot is
+actually wanted; otherwise the command is read-only. Details are in
+[market-data.md](market-data.md).
+
 ## Adding work
 
 1. Read `AGENTS.md`, relevant architecture docs, and accepted ADRs.

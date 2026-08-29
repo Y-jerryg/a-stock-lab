@@ -59,6 +59,8 @@ jobs:
         run: pnpm lint
       - name: TypeScript
         run: pnpm typecheck
+      - name: Prettier
+        run: pnpm exec prettier --check .
       - name: Tests
         run: pnpm test
       - name: Production build
