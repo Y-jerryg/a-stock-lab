@@ -32,7 +32,7 @@ For the hot-reload development stack, run:
 ```
 
 The development override mounts source code, enables FastAPI reload, runs Vite, persists PostgreSQL
-in a named volume, and bind-mounts `runtime/` for future immutable datasets. Stop it with:
+in a named volume, and bind-mounts `runtime/` for immutable market datasets. Stop it with:
 
 ```powershell
 ./scripts/dev.ps1 -Stop
@@ -92,6 +92,40 @@ Use `--repeat 3 --interval-seconds 120` to collect latency/success/count observa
 enforce a minimum 30-second interval. Use `--persist` only when a validated Parquet snapshot is
 actually wanted; otherwise the command is read-only. Details are in
 [market-data.md](market-data.md).
+
+## Manual point-in-time snapshot execution
+
+The execution command is separate from the non-persistent diagnostic. It always records a run in
+PostgreSQL and, after calendar and quality acceptance, stores Parquet plus a PostgreSQL manifest:
+
+```powershell
+Set-Location backend
+uv run alembic upgrade head
+uv run market-snapshot execute-now
+$shanghaiDate = [DateTimeOffset]::UtcNow.ToOffset([TimeSpan]::FromHours(8)).ToString('yyyy-MM-dd')
+uv run market-snapshot execute-at "$($shanghaiDate)T14:30:00+08:00"
+uv run market-snapshot inspect --run-id <run-uuid>
+```
+
+Use `--force` only for an explicit non-official rerun. A failed or successful official identity is
+otherwise replayed idempotently without another network call. The trading calendar is provider data;
+the engine never treats an ordinary weekday rule as sufficient evidence of a trading day. There is
+no recurring scheduler.
+
+## Manual Tail Radar screening
+
+After a successful official snapshot execution, pass its snapshot UUID explicitly. Screening reads
+the registered local Parquet artifact and PostgreSQL only; it does not make a live provider call:
+
+```powershell
+Set-Location backend
+uv run alembic upgrade head
+uv run tail-radar execute --snapshot-id <snapshot-uuid>
+uv run tail-radar inspect --run-id <tail-radar-run-uuid>
+```
+
+Repeating the same snapshot under `tail-radar-screen-v1` returns the existing run. Public APIs are
+read-only and cannot execute this command. See [Tail Radar documentation](tail-radar.md).
 
 ## Adding work
 

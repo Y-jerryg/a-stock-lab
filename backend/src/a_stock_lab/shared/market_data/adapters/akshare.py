@@ -3,7 +3,6 @@ import re
 import time
 from collections.abc import Callable, Collection, Mapping
 from datetime import datetime
-from importlib.metadata import PackageNotFoundError, version
 from typing import Literal, Protocol, cast
 
 from pydantic import ValidationError
@@ -28,9 +27,10 @@ from a_stock_lab.shared.market_data.models import (
 )
 from a_stock_lab.shared.market_data.symbols import infer_a_share_exchange
 
+from .akshare_common import AKSHARE_PROVIDER_ID, installed_akshare_version
+
 logger = get_logger(__name__)
 
-_PROVIDER_ID = "akshare"
 _SHARES_PER_LOT = 100
 _SYMBOL_PATTERN = re.compile(r"^\d{6}$")
 _MISSING_TEXT = frozenset({"", "-", "--", "nan", "none", "null", "<na>", "n/a"})
@@ -68,13 +68,6 @@ def _fetch_live_frame() -> object:
     import akshare  # type: ignore[import-untyped]
 
     return akshare.stock_zh_a_spot_em()
-
-
-def _installed_akshare_version() -> str:
-    try:
-        return version("akshare")
-    except PackageNotFoundError:
-        return "unknown"
 
 
 def _optional_text(value: object) -> str | None:
@@ -118,7 +111,7 @@ class AkShareMarketDataProvider:
 
     @property
     def provider_id(self) -> str:
-        return _PROVIDER_ID
+        return AKSHARE_PROVIDER_ID
 
     @property
     def capabilities(self) -> frozenset[MarketDataCapability]:
@@ -146,9 +139,11 @@ class AkShareMarketDataProvider:
             records=tuple(records),
             raw_record_count=len(rows),
             normalization_issues=tuple(issues),
+            provider_version=installed_akshare_version(),
+            provider_timestamp=None,
             provider_metadata={
                 "adapter": "AkShareMarketDataProvider",
-                "akshare_version": _installed_akshare_version(),
+                "akshare_version": installed_akshare_version(),
                 "upstream": "Eastmoney",
                 "upstream_function": "stock_zh_a_spot_em",
                 "attempt_count": attempt_count,

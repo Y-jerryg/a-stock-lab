@@ -1,21 +1,30 @@
 import json
 from datetime import datetime
+from hashlib import sha256
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 import pytest
 
 from a_stock_lab.core.time import MARKET_TIME_ZONE
-from a_stock_lab.shared.market_data.adapters.parquet import ParquetMarketSnapshotWriter
-from a_stock_lab.shared.market_data.errors import SnapshotPersistenceError
+from a_stock_lab.shared.market_data.adapters.parquet import (
+    ParquetMarketSnapshotReader,
+    ParquetMarketSnapshotWriter,
+)
+from a_stock_lab.shared.market_data.errors import (
+    SnapshotArtifactIntegrityError,
+    SnapshotPersistenceError,
+)
 from a_stock_lab.shared.market_data.models import (
     FullMarketSnapshot,
     MarketSnapshotRecord,
     SnapshotManifest,
+    SnapshotManifestStatus,
     SnapshotQualityReport,
     SnapshotQualityThresholds,
 )
+from a_stock_lab.shared.market_data.persistence_schemas import PersistedSnapshotManifest
 
 
 def valid_snapshot(snapshot_id: str) -> FullMarketSnapshot:
@@ -45,8 +54,8 @@ def valid_snapshot(snapshot_id: str) -> FullMarketSnapshot:
     manifest = SnapshotManifest(
         snapshot_id=UUID(snapshot_id),
         provider="fake",
-        request_started_at=timestamp,
-        request_finished_at=timestamp,
+        actual_fetch_started_at=timestamp,
+        actual_fetch_finished_at=timestamp,
         latency_ms=10,
         record_count=1,
         schema_version=1,
@@ -58,14 +67,16 @@ def valid_snapshot(snapshot_id: str) -> FullMarketSnapshot:
 def test_parquet_writer_persists_records_and_embedded_manifest_atomically(tmp_path: Path) -> None:
     snapshot = valid_snapshot("11111111-1111-1111-1111-111111111111")
 
-    path = ParquetMarketSnapshotWriter(tmp_path).write(snapshot)
+    writer = ParquetMarketSnapshotWriter(tmp_path)
+    stored = writer.write(snapshot)
+    path = tmp_path / stored.storage_key
 
-    assert path == (
-        tmp_path
-        / "market-data"
-        / "2026-08-28"
-        / "full-market-11111111-1111-1111-1111-111111111111.parquet"
+    assert stored.storage_key == (
+        "market-data/2026-08-28/full-market-11111111-1111-1111-1111-111111111111.parquet"
     )
+    assert len(stored.checksum_sha256) == 64
+    assert stored.checksum_sha256 == sha256(path.read_bytes()).hexdigest()
+    assert stored.size_bytes == path.stat().st_size
     assert not list(path.parent.glob("*.tmp"))
     table = pq.read_table(path)
     assert table.to_pylist()[0]["symbol"] == "600000"
@@ -74,6 +85,10 @@ def test_parquet_writer_persists_records_and_embedded_manifest_atomically(tmp_pa
     )
     assert manifest_data["snapshot_id"] == "11111111-1111-1111-1111-111111111111"
     assert manifest_data["quality_report"]["passed"] is True
+
+    with pytest.raises(SnapshotPersistenceError):
+        writer.write(snapshot)
+    assert stored.checksum_sha256 == sha256(path.read_bytes()).hexdigest()
 
 
 def test_parquet_writer_maps_storage_failure_and_removes_temporary_file(
@@ -94,3 +109,35 @@ def test_parquet_writer_maps_storage_failure_and_removes_temporary_file(
     target_directory = tmp_path / "market-data" / "2026-08-28"
     assert not list(target_directory.glob("*.tmp"))
     assert not list(target_directory.glob("*.parquet"))
+
+
+def test_parquet_reader_verifies_checksum_and_embedded_snapshot_identity(tmp_path: Path) -> None:
+    snapshot = valid_snapshot("33333333-3333-3333-3333-333333333333")
+    stored = ParquetMarketSnapshotWriter(tmp_path).write(snapshot)
+    timestamp = snapshot.manifest.actual_fetch_finished_at
+    persisted = PersistedSnapshotManifest(
+        snapshot_id=snapshot.manifest.snapshot_id,
+        run_id=uuid4(),
+        trade_date=timestamp.date(),
+        intended_snapshot_time=timestamp,
+        actual_fetch_started_at=snapshot.manifest.actual_fetch_started_at,
+        actual_fetch_finished_at=timestamp,
+        provider=snapshot.manifest.provider,
+        provider_metadata={},
+        storage_key=stored.storage_key,
+        checksum_sha256=stored.checksum_sha256,
+        row_count=1,
+        latency_ms=snapshot.manifest.latency_ms,
+        quality_report=snapshot.manifest.quality_report,
+        schema_version=snapshot.manifest.schema_version,
+        status=SnapshotManifestStatus.AVAILABLE,
+        persisted_at=timestamp,
+    )
+    reader = ParquetMarketSnapshotReader(tmp_path)
+
+    assert reader.read(persisted) == snapshot
+
+    path = tmp_path / stored.storage_key
+    path.write_bytes(path.read_bytes() + b"tampered")
+    with pytest.raises(SnapshotArtifactIntegrityError, match="checksum"):
+        reader.read(persisted)

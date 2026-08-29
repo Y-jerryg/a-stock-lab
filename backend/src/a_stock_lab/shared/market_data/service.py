@@ -17,7 +17,7 @@ from a_stock_lab.shared.market_data.models import (
 )
 from a_stock_lab.shared.market_data.quality import evaluate_snapshot_quality
 
-SNAPSHOT_SCHEMA_VERSION = 1
+SNAPSHOT_SCHEMA_VERSION = 2
 
 
 class FullMarketSnapshotService:
@@ -36,6 +36,10 @@ class FullMarketSnapshotService:
         self._clock = clock
         self._timer = timer
 
+    @property
+    def provider_id(self) -> str:
+        return self._provider.provider_id
+
     def fetch(self) -> FullMarketSnapshot:
         if MarketDataCapability.FULL_MARKET_SNAPSHOT not in self._provider.capabilities:
             raise ProviderInvalidResponseError(
@@ -43,16 +47,24 @@ class FullMarketSnapshotService:
                 message="provider does not declare full-market snapshot capability",
             )
 
-        request_started_at = as_market_timezone(self._clock())
+        actual_fetch_started_at = as_market_timezone(self._clock())
         timer_started_at = self._timer()
         batch = self._provider.fetch_full_market_snapshot()
         latency_ms = round((self._timer() - timer_started_at) * 1_000, 3)
-        request_finished_at = as_market_timezone(self._clock())
+        actual_fetch_finished_at = as_market_timezone(self._clock())
 
         if batch.provider != self._provider.provider_id:
             raise ProviderInvalidResponseError(
                 provider=self._provider.provider_id,
                 message="provider identity did not match the returned batch",
+            )
+        if any(
+            not actual_fetch_started_at <= record.fetched_at <= actual_fetch_finished_at
+            for record in batch.records
+        ):
+            raise ProviderInvalidResponseError(
+                provider=self._provider.provider_id,
+                message="record fetch timestamp fell outside the observed provider call",
             )
 
         quality_report = evaluate_snapshot_quality(batch, self._thresholds)
@@ -60,16 +72,18 @@ class FullMarketSnapshotService:
             raise MarketDataQualityError(
                 provider=batch.provider,
                 report=quality_report,
-                request_started_at=request_started_at,
-                request_finished_at=request_finished_at,
+                actual_fetch_started_at=actual_fetch_started_at,
+                actual_fetch_finished_at=actual_fetch_finished_at,
                 latency_ms=latency_ms,
             )
 
         manifest = SnapshotManifest(
             snapshot_id=uuid4(),
             provider=batch.provider,
-            request_started_at=request_started_at,
-            request_finished_at=request_finished_at,
+            provider_version=batch.provider_version,
+            provider_timestamp=batch.provider_timestamp,
+            actual_fetch_started_at=actual_fetch_started_at,
+            actual_fetch_finished_at=actual_fetch_finished_at,
             latency_ms=latency_ms,
             record_count=len(batch.records),
             schema_version=SNAPSHOT_SCHEMA_VERSION,

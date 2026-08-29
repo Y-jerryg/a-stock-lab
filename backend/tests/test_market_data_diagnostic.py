@@ -1,11 +1,10 @@
 import json
-from datetime import datetime
 from pathlib import Path
 
 import pytest
 
 from a_stock_lab.core.config import Settings
-from a_stock_lab.core.time import MARKET_TIME_ZONE
+from a_stock_lab.core.time import now_in_market_timezone
 from a_stock_lab.shared.market_data import diagnostic
 from a_stock_lab.shared.market_data.errors import SnapshotPersistenceError
 from a_stock_lab.shared.market_data.models import (
@@ -14,6 +13,7 @@ from a_stock_lab.shared.market_data.models import (
     MarketSnapshotRecord,
     ProviderSnapshotBatch,
 )
+from a_stock_lab.shared.market_data.persistence_schemas import SnapshotStorageResult
 
 
 class FakeProvider:
@@ -21,7 +21,7 @@ class FakeProvider:
     capabilities = frozenset({MarketDataCapability.FULL_MARKET_SNAPSHOT})
 
     def fetch_full_market_snapshot(self) -> ProviderSnapshotBatch:
-        fetched_at = datetime(2026, 8, 29, 14, 30, tzinfo=MARKET_TIME_ZONE)
+        fetched_at = now_in_market_timezone()
         return ProviderSnapshotBatch(
             provider=self.provider_id,
             raw_record_count=1,
@@ -87,7 +87,7 @@ def test_diagnostic_reports_persistence_failure_as_an_observation(
         def __init__(self, _: Path) -> None:
             pass
 
-        def write(self, _: FullMarketSnapshot) -> Path:
+        def write(self, _: FullMarketSnapshot) -> SnapshotStorageResult:
             raise SnapshotPersistenceError(target=tmp_path / "snapshot.parquet")
 
     monkeypatch.setattr(diagnostic, "get_settings", lambda: diagnostic_settings(tmp_path))

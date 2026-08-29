@@ -10,7 +10,7 @@ export function TailRadarPage() {
       <PageHeader
         eyebrow="Research / Tail Radar"
         title="Tail Radar"
-        description="A future point-in-time late-session research workflow for the full A-share market. Phase 0 establishes its durable boundaries without implementing market logic."
+        description="Deterministic point-in-time screening of one persisted full A-share market snapshot. Execution remains an explicit backend operation."
       />
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
@@ -20,14 +20,14 @@ export function TailRadarPage() {
               <div className="mx-auto mb-5 grid size-14 place-items-center rounded-xl border border-[var(--border-strong)] bg-[var(--surface-muted)] shadow-sm">
                 <Radar className="size-6 text-[var(--accent)]" />
               </div>
-              <Badge variant="ready">Foundation ready</Badge>
+              <Badge variant="ready">Screening backend ready</Badge>
               <h2 className="mt-4 text-xl font-semibold tracking-tight">
                 No research run has been produced
               </h2>
               <p className="mt-3 text-sm leading-6 text-[var(--text-muted)]">
-                Market providers, trading-calendar rules, snapshot capture, candidate selection, and
-                analysis are intentionally deferred. Results will appear here only when backed by a
-                persisted research artifact.
+                This frontend view does not invent or trigger results. Phase 3 exposes persisted
+                runs and candidates through read-only APIs; UI result integration remains a later
+                presentation task.
               </p>
               <div className="mx-auto mt-7 flex max-w-sm items-start gap-3 rounded-md border border-[var(--border)] bg-[var(--surface-muted)] p-3 text-left">
                 <ShieldCheck className="mt-0.5 size-4 shrink-0 text-[var(--text-subtle)]" />
@@ -72,10 +72,10 @@ export function TailRadarPage() {
               </div>
               <div>
                 <dt className="text-[11px] font-semibold tracking-wide text-[var(--text-subtle)] uppercase">
-                  Current phase
+                  Current rule
                 </dt>
                 <dd className="mt-1.5 text-[var(--text-muted)]">
-                  Architecture only · no market data
+                  tail-radar-screen-v1 · inclusive 2.00%–3.00%
                 </dd>
               </div>
             </dl>

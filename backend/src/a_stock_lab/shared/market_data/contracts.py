@@ -1,4 +1,4 @@
-from pathlib import Path
+from datetime import date
 from typing import Protocol, runtime_checkable
 
 from a_stock_lab.shared.market_data.models import (
@@ -6,6 +6,8 @@ from a_stock_lab.shared.market_data.models import (
     MarketDataCapability,
     ProviderSnapshotBatch,
 )
+from a_stock_lab.shared.market_data.persistence_schemas import SnapshotStorageResult
+from a_stock_lab.shared.market_data.trading_calendar import TradingDay
 
 
 @runtime_checkable
@@ -21,5 +23,15 @@ class MarketDataProvider(Protocol):
     def fetch_full_market_snapshot(self) -> ProviderSnapshotBatch: ...
 
 
-class MarketSnapshotWriter(Protocol):
-    def write(self, snapshot: FullMarketSnapshot) -> Path: ...
+class MarketSnapshotStorage(Protocol):
+    def write(self, snapshot: FullMarketSnapshot) -> SnapshotStorageResult: ...
+
+    def delete(self, storage_key: str) -> None: ...
+
+
+@runtime_checkable
+class TradingCalendar(Protocol):
+    @property
+    def provider_id(self) -> str: ...
+
+    def resolve(self, trade_date: date) -> TradingDay: ...

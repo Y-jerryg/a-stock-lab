@@ -1,1 +1,1 @@
-"""Provider-independent Tail Radar domain contracts."""
+"""Provider-independent Tail Radar screening rules and evidence models."""

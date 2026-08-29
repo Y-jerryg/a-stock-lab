@@ -6,16 +6,18 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from a_stock_lab.core.config import Settings, get_settings
+from a_stock_lab.core.config import get_settings
 from a_stock_lab.core.time import now_in_market_timezone
-from a_stock_lab.shared.market_data.adapters.factory import build_market_data_provider
+from a_stock_lab.shared.market_data.adapters.factory import (
+    build_market_data_provider,
+    build_snapshot_quality_thresholds,
+)
 from a_stock_lab.shared.market_data.adapters.parquet import ParquetMarketSnapshotWriter
 from a_stock_lab.shared.market_data.errors import (
     MarketDataQualityError,
     ProviderError,
     SnapshotPersistenceError,
 )
-from a_stock_lab.shared.market_data.models import SnapshotQualityThresholds
 from a_stock_lab.shared.market_data.service import FullMarketSnapshotService
 
 _MINIMUM_REPEAT_INTERVAL_SECONDS = 30.0
@@ -55,18 +57,6 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _quality_thresholds(settings: Settings) -> SnapshotQualityThresholds:
-    return SnapshotQualityThresholds(
-        min_record_count=settings.market_snapshot_min_records,
-        max_duplicate_symbols=settings.market_snapshot_max_duplicate_symbols,
-        max_missing_symbol_ratio=settings.market_snapshot_max_missing_symbol_ratio,
-        max_invalid_price_ratio=settings.market_snapshot_max_invalid_price_ratio,
-        max_invalid_pct_change_ratio=settings.market_snapshot_max_invalid_pct_change_ratio,
-        max_malformed_row_ratio=settings.market_snapshot_max_malformed_row_ratio,
-        max_abs_pct_change=settings.market_snapshot_max_abs_pct_change,
-    )
-
-
 def _emit(payload: dict[str, Any]) -> None:
     sys.stdout.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
     sys.stdout.flush()
@@ -85,7 +75,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     provider = build_market_data_provider(settings)
     service = FullMarketSnapshotService(
         provider=provider,
-        thresholds=_quality_thresholds(settings),
+        thresholds=build_snapshot_quality_thresholds(settings),
     )
     writer = ParquetMarketSnapshotWriter(Path(settings.runtime_data_dir)) if args.persist else None
     had_failure = False
@@ -95,15 +85,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         timer_started_at = time.perf_counter()
         try:
             snapshot = service.fetch()
-            persisted_to = writer.write(snapshot) if writer is not None else None
+            persisted = writer.write(snapshot) if writer is not None else None
             _emit(
                 {
                     "observation": observation,
                     "status": "success",
                     "snapshot_id": str(snapshot.manifest.snapshot_id),
                     "provider": snapshot.manifest.provider,
-                    "request_started_at": snapshot.manifest.request_started_at.isoformat(),
-                    "request_finished_at": snapshot.manifest.request_finished_at.isoformat(),
+                    "actual_fetch_started_at": (
+                        snapshot.manifest.actual_fetch_started_at.isoformat()
+                    ),
+                    "actual_fetch_finished_at": (
+                        snapshot.manifest.actual_fetch_finished_at.isoformat()
+                    ),
                     "latency_ms": snapshot.manifest.latency_ms,
                     "record_count": snapshot.manifest.record_count,
                     "quality_report": snapshot.manifest.quality_report.model_dump(mode="json"),
@@ -111,7 +105,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                         record.model_dump(mode="json")
                         for record in snapshot.records[: args.samples]
                     ],
-                    "persisted_to": str(persisted_to) if persisted_to is not None else None,
+                    "persisted_to": (
+                        str(Path(settings.runtime_data_dir) / persisted.storage_key)
+                        if persisted is not None
+                        else None
+                    ),
+                    "checksum_sha256": (
+                        persisted.checksum_sha256 if persisted is not None else None
+                    ),
                 }
             )
         except MarketDataQualityError as exc:
@@ -121,8 +122,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "observation": observation,
                     "status": "quality_failed",
                     "provider": exc.provider,
-                    "request_started_at": exc.request_started_at.isoformat(),
-                    "request_finished_at": exc.request_finished_at.isoformat(),
+                    "actual_fetch_started_at": exc.actual_fetch_started_at.isoformat(),
+                    "actual_fetch_finished_at": exc.actual_fetch_finished_at.isoformat(),
                     "latency_ms": exc.latency_ms,
                     "record_count": exc.report.normalized_record_count,
                     "quality_report": exc.report.model_dump(mode="json"),
@@ -136,8 +137,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "observation": observation,
                     "status": "provider_failed",
                     "provider": exc.provider,
-                    "request_started_at": outer_started_at.isoformat(),
-                    "request_finished_at": finished_at.isoformat(),
+                    "actual_fetch_started_at": outer_started_at.isoformat(),
+                    "actual_fetch_finished_at": finished_at.isoformat(),
                     "latency_ms": round((time.perf_counter() - timer_started_at) * 1_000, 3),
                     "record_count": 0,
                     "error_type": type(exc).__name__,
@@ -152,8 +153,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "status": "persistence_failed",
                     "snapshot_id": str(snapshot.manifest.snapshot_id),
                     "provider": snapshot.manifest.provider,
-                    "request_started_at": snapshot.manifest.request_started_at.isoformat(),
-                    "request_finished_at": snapshot.manifest.request_finished_at.isoformat(),
+                    "actual_fetch_started_at": (
+                        snapshot.manifest.actual_fetch_started_at.isoformat()
+                    ),
+                    "actual_fetch_finished_at": (
+                        snapshot.manifest.actual_fetch_finished_at.isoformat()
+                    ),
                     "latency_ms": snapshot.manifest.latency_ms,
                     "record_count": snapshot.manifest.record_count,
                     "quality_report": snapshot.manifest.quality_report.model_dump(mode="json"),

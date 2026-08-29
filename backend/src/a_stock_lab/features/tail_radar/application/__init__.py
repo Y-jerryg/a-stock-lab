@@ -1,1 +1,1 @@
-"""Tail Radar use-case orchestration boundary."""
+"""Tail Radar execution and read-query orchestration."""

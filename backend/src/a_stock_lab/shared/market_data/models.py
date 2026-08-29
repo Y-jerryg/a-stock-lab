@@ -28,6 +28,10 @@ class MarketDataCapability(StrEnum):
     TRADING_CALENDAR = "trading_calendar"
 
 
+class SnapshotManifestStatus(StrEnum):
+    AVAILABLE = "available"
+
+
 class NormalizationIssueCode(StrEnum):
     MISSING_SYMBOL = "missing_symbol"
     INVALID_SYMBOL = "invalid_symbol"
@@ -68,7 +72,7 @@ class MarketSnapshotRecord(BaseModel):
     pb: float | None = None
     total_market_cap: float | None = None
     float_market_cap: float | None = None
-    provider: str = Field(min_length=1)
+    provider: str = Field(min_length=1, max_length=128)
     provider_timestamp: AwareDatetime | None = None
     fetched_at: AwareDatetime
 
@@ -85,11 +89,18 @@ class ProviderSnapshotBatch(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    provider: str = Field(min_length=1)
+    provider: str = Field(min_length=1, max_length=128)
     records: tuple[MarketSnapshotRecord, ...]
     raw_record_count: int = Field(ge=0)
     normalization_issues: tuple[NormalizationIssue, ...] = ()
+    provider_version: str | None = Field(default=None, max_length=128)
+    provider_timestamp: AwareDatetime | None = None
     provider_metadata: dict[str, JsonValue] = Field(default_factory=dict)
+
+    @field_validator("provider_timestamp")
+    @classmethod
+    def normalize_provider_timestamp(cls, value: AwareDatetime | None) -> AwareDatetime | None:
+        return None if value is None else as_market_timezone(value)
 
     @model_validator(mode="after")
     def normalized_count_cannot_exceed_raw_count(self) -> "ProviderSnapshotBatch":
@@ -150,24 +161,32 @@ class SnapshotManifest(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     snapshot_id: UUID
-    provider: str = Field(min_length=1)
-    request_started_at: AwareDatetime
-    request_finished_at: AwareDatetime
+    provider: str = Field(min_length=1, max_length=128)
+    provider_version: str | None = Field(default=None, max_length=128)
+    provider_timestamp: AwareDatetime | None = None
+    actual_fetch_started_at: AwareDatetime
+    actual_fetch_finished_at: AwareDatetime
     latency_ms: float = Field(ge=0)
     record_count: int = Field(ge=0)
     schema_version: int = Field(ge=1)
     provider_metadata: dict[str, JsonValue] = Field(default_factory=dict)
     quality_report: SnapshotQualityReport
 
-    @field_validator("request_started_at", "request_finished_at")
+    @field_validator(
+        "provider_timestamp",
+        "actual_fetch_started_at",
+        "actual_fetch_finished_at",
+    )
     @classmethod
-    def normalize_timestamps_to_market_timezone(cls, value: AwareDatetime) -> AwareDatetime:
-        return as_market_timezone(value)
+    def normalize_timestamps_to_market_timezone(
+        cls, value: AwareDatetime | None
+    ) -> AwareDatetime | None:
+        return None if value is None else as_market_timezone(value)
 
     @model_validator(mode="after")
     def timing_and_count_are_consistent(self) -> "SnapshotManifest":
-        if self.request_finished_at < self.request_started_at:
-            raise ValueError("request finish cannot precede request start")
+        if self.actual_fetch_finished_at < self.actual_fetch_started_at:
+            raise ValueError("fetch finish cannot precede fetch start")
         if self.record_count != self.quality_report.normalized_record_count:
             raise ValueError("manifest record count must match the quality report")
         return self

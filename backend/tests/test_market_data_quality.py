@@ -1,9 +1,12 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
 from a_stock_lab.core.time import MARKET_TIME_ZONE
-from a_stock_lab.shared.market_data.errors import MarketDataQualityError
+from a_stock_lab.shared.market_data.errors import (
+    MarketDataQualityError,
+    ProviderInvalidResponseError,
+)
 from a_stock_lab.shared.market_data.models import (
     MarketDataCapability,
     MarketSnapshotRecord,
@@ -132,8 +135,33 @@ def test_valid_batch_receives_a_versioned_manifest() -> None:
 
     snapshot = service.fetch()
 
-    assert snapshot.manifest.schema_version == 1
+    assert snapshot.manifest.schema_version == 2
     assert snapshot.manifest.record_count == 1
     assert snapshot.manifest.latency_ms == 125
     assert snapshot.manifest.quality_report.passed is True
     assert snapshot.manifest.provider_metadata == {"source_version": "test"}
+
+
+def test_record_fetch_time_must_fall_inside_the_observed_provider_call() -> None:
+    batch = ProviderSnapshotBatch(
+        provider="fake",
+        raw_record_count=1,
+        records=(
+            MarketSnapshotRecord(
+                symbol="600000",
+                name="Test",
+                price=10,
+                provider="fake",
+                fetched_at=NOW + timedelta(seconds=1),
+            ),
+        ),
+    )
+    service = FullMarketSnapshotService(
+        provider=FakeProvider(batch),
+        thresholds=strict_thresholds(),
+        clock=lambda: NOW,
+        timer=iter((10.0, 10.1)).__next__,
+    )
+
+    with pytest.raises(ProviderInvalidResponseError, match="outside the observed provider call"):
+        service.fetch()

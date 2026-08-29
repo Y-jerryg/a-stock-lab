@@ -3,12 +3,15 @@
 A-Stock Lab is a production-oriented personal A-share market research platform. Phase 0 established
 the modular monolith, database contracts, runtime, observability, frontend shell, and delivery
 tooling. Phase 1 adds provider-neutral market-data infrastructure, an isolated AKShare adapter,
-quality-gated full-market snapshots, and opt-in Parquet diagnostics. It deliberately contains no
-Tail Radar screening, trading rules, AI calls, or simulated financial results.
+quality-gated full-market snapshots, and opt-in Parquet diagnostics. Phase 2 adds the manual,
+point-in-time execution engine, provider-neutral trading calendar, PostgreSQL snapshot manifests,
+and idempotent official-run semantics. Phase 3 adds the deterministic, point-in-time
+`tail-radar-screen-v1` rule, auditable candidate artifacts, and public read-only result APIs. It
+deliberately contains no recurring scheduler, technical indicators, AI calls, or simulated results.
 
 ## Modules
 
-- **Tail Radar** — point-in-time late-session market research (implementation begins after Phase 0)
+- **Tail Radar** — deterministic point-in-time full-market snapshot screening
 - **Intelligence** — daily market and company intelligence (reserved)
 - **Quant Lab** — historical quantitative research (reserved)
 - **AI Research Assistant** — future assistant grounded in artifacts from the other modules
@@ -100,6 +103,43 @@ Successful and failed observations are emitted as JSON, including request timing
 count, quality metrics, and normalized samples. Persisted snapshots are written below
 `runtime/market-data/`, which is ignored by Git. See [market-data documentation](docs/market-data.md)
 for the contract, thresholds, failure semantics, and storage layout.
+
+## Point-in-time snapshot execution
+
+Apply migrations before using the Phase 2 commands. These commands make live calendar and market
+provider calls; they are manual operations and are not run by CI:
+
+```powershell
+Set-Location backend
+uv run alembic upgrade head
+uv run market-snapshot execute-now
+$shanghaiDate = [DateTimeOffset]::UtcNow.ToOffset([TimeSpan]::FromHours(8)).ToString('yyyy-MM-dd')
+uv run market-snapshot execute-at "$($shanghaiDate)T14:30:00+08:00"
+uv run market-snapshot execute-at "$($shanghaiDate)T14:30:00+08:00" --force
+uv run market-snapshot inspect --run-id <run-uuid>
+uv run market-snapshot inspect --snapshot-id <snapshot-uuid>
+```
+
+An official execution is unique by job type, Shanghai trade date, intended timestamp, and execution
+version. Repeating it returns the existing run without another provider call. `--force` creates an
+explicit non-official rerun; it does not overwrite or supersede the official manifest. The supplied
+timestamp must include an offset, cannot be in the future, and must be on the actual Shanghai
+execution date because the live feed cannot reconstruct an earlier market state.
+
+## Deterministic Tail Radar screening
+
+After an official snapshot has been persisted, screen that immutable snapshot explicitly:
+
+```powershell
+Set-Location backend
+uv run tail-radar execute --snapshot-id <snapshot-uuid>
+uv run tail-radar inspect --run-id <tail-radar-run-uuid>
+```
+
+Version `tail-radar-screen-v1` includes a valid normalized record only when
+`2.00 <= pct_change <= 3.00`. Repeating the same snapshot/rule pair is idempotent. The command makes
+no live provider or AI call; public `/api/v1/tail-radar` routes only read persisted runs and
+candidates. See [Tail Radar documentation](docs/tail-radar.md).
 
 ## Quality commands
 

@@ -19,6 +19,8 @@ dependencies = [
 
 [project.scripts]
 market-data-diagnostic = "a_stock_lab.shared.market_data.diagnostic:main"
+market-snapshot = "a_stock_lab.shared.market_data.execution_cli:main"
+tail-radar = "a_stock_lab.features.tail_radar.execution_cli:main"
 
 [dependency-groups]
 dev = [
@@ -59,3 +61,6 @@ addopts = "-ra --strict-config --strict-markers"
 testpaths = ["tests"]
 pythonpath = ["src"]
 asyncio_mode = "auto"
+markers = [
+  "postgres: integration tests requiring a migrated PostgreSQL test database",
+]

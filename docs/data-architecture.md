@@ -5,29 +5,47 @@
 PostgreSQL is authoritative for execution lifecycle, research artifacts, analysis and candidate
 metadata, news/source metadata, and relational indexes. SQLite is not a production substitute.
 
-Phase 0 creates two durable shared contracts:
+The durable relational contracts are:
 
 - `execution_runs` records intended and actual timing, status, provider, implementation version,
-  metadata, and structured error information.
+  official/forced identity, optional rerun lineage, metadata, and structured error information.
 - `research_artifacts` stores module, artifact type, optional symbol/trade date, aware `as_of`, schema
   version, structured JSON payload, and creation time.
+- `market_snapshot_manifests` records each accepted Parquet artifact, point-in-time timestamps,
+  provider provenance, quality report, relative storage key, SHA-256 checksum, schema version, and
+  status. One manifest belongs to one execution run.
+- `tail_radar_runs` links a shared execution run to one official source snapshot, screening rule
+  version, exact configuration, and finalized evaluation counts.
+- `tail_radar_candidates` links a candidate `ResearchArtifact` to its Tail Radar run, source market
+  snapshot, and symbol. The artifact payload carries the complete normalized row and screening
+  evidence.
 
-Artifact type names are namespaced (for example `tail_radar.stock_analysis`) and payload consumers
+Artifact type names are namespaced (for example `tail_radar.candidate`) and payload consumers
 must select a supported `schema_version`. The schema remains flexible without sacrificing indexed,
 auditable envelope fields.
+
+Phase 3 publishes deterministic selections as `tail_radar.candidate` schema version 1 artifacts.
+The candidate `as_of` is the actual source fetch-finish timestamp, while the payload separately
+retains intended time, all actual timestamps, snapshot identity/checksum, rule version, normalized
+row, and exact inclusive decision evidence.
 
 ## Parquet: large immutable datasets
 
 Accepted full-market snapshots use Parquet under `runtime/market-data/<fetch-date>/`. Each file has
-a stable typed record schema and embeds its snapshot manifest as Parquet metadata. Files are written
-through an atomic same-directory replacement and are always ignored by Git. Containers bind-mount
-`runtime/`, so data does not exist only in disposable layers. Historical bars and large quantitative
-datasets will follow the same immutable-data principle in later phases.
+a stable typed record schema and embeds its snapshot manifest as Parquet metadata. Files are
+published through an atomic same-directory no-clobber link and are always ignored by Git. Containers
+bind-mount `runtime/`, so data does not exist only in disposable layers. Historical bars and large
+quantitative datasets will follow the same immutable-data principle in later phases.
 
-The Phase 1 diagnostic embeds its manifest in each Parquet file. A future scheduled ingestion
-workflow should additionally register dataset manifests in PostgreSQL with provider, content
-identity, time range, schema version, row count, creation time, storage location, and quality status.
-Bulk records should not be duplicated into PostgreSQL by default.
+The embedded fetch manifest remains self-describing. Phase 2 also registers an immutable PostgreSQL
+manifest for executed snapshots so provenance can be inspected without scanning Parquet metadata.
+The database stores a relative storage key rather than a machine-specific absolute path. Bulk rows
+are not duplicated into PostgreSQL.
+
+Official execution claims are unique by job type, trade date, intended snapshot time, and execution
+version. Forced runs are marked non-official and may link to the official run. The Parquet file is
+created before the database manifest transaction; if commit outcome becomes uncertain, the file is
+retained to avoid breaking a manifest that may have committed.
 
 ## Integrity rules
 

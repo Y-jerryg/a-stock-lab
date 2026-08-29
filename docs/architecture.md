@@ -13,8 +13,16 @@ flowchart LR
   Features --> Shared["ResearchArtifact + ExecutionRun"]
   Features --> MarketData["MarketDataProvider + quality gate"]
   MarketData --> Adapters["Provider adapters"]
+  Calendar["TradingCalendar"] --> Adapters
+  Engine["Point-in-time snapshot engine"] --> Calendar
+  Engine --> MarketData
+  Engine --> Shared
   Shared --> Postgres[(PostgreSQL)]
-  MarketData -. "validated snapshots" .-> Parquet[(Runtime Parquet)]
+  Engine -->|"immutable rows"| Parquet[(Runtime Parquet)]
+  Engine -->|"manifest + checksum"| Postgres
+  TailRadar["Tail Radar screening service"] -->|"read official snapshot"| Postgres
+  TailRadar -->|"verify + read rows"| Parquet
+  TailRadar -->|"versioned candidate artifacts"| Shared
   Internal["Future authenticated operations"] -.->|"separate internal boundary"| API
 ```
 
@@ -37,9 +45,14 @@ Expensive actions such as market refreshes, OpenAI calls, quantitative runs, and
 must not be added as anonymous public actions. Authentication is intentionally deferred; therefore
 the operational router is not mounted.
 
-The Phase 1 live snapshot path is an explicitly invoked diagnostic rather than an API route or
-scheduler. This keeps network work out of request handling and prevents accidental polling while
-provider reliability is being measured.
+The Phase 1 live diagnostic, Phase 2 point-in-time execution CLI, and Phase 3 Tail Radar CLI are
+explicitly invoked operations rather than API routes or schedulers. The snapshot execution engine
+claims an official logical
+run before network work, resolves the trade date through `TradingCalendar`, persists immutable rows
+to Parquet, and transactionally registers the manifest with the successful run transition. Public
+request handling never triggers market refreshes or screening. Tail Radar reads one verified
+official Parquet snapshot, applies a versioned deterministic domain rule, and transactionally
+publishes candidates as `ResearchArtifact` records plus feature-specific relational links.
 
 ## Frontend boundaries
 
@@ -56,6 +69,12 @@ results.
 `Asia/Shanghai` is the canonical A-share market timezone. Market and research timestamps are aware.
 Every historical calculation carries an explicit `as_of`; adapters and services must prevent future
 information from entering historical analysis.
+
+Snapshot execution separately preserves intended time, actual fetch start/finish, legitimate
+provider time, and persistence time. The official identity is unique by job type, trade date,
+intended time, and execution version. Forced reruns are non-official and remain explicitly linked.
+Tail Radar candidate `as_of` is the source snapshot's actual fetch-finish time; its evidence also
+preserves the distinct intended snapshot time.
 
 ## Observability
 
