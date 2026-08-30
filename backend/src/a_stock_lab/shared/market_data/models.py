@@ -1,4 +1,4 @@
-from enum import StrEnum
+from enum import IntEnum, StrEnum
 from uuid import UUID
 
 from pydantic import (
@@ -26,6 +26,102 @@ class MarketDataCapability(StrEnum):
     DAILY_BARS = "daily_bars"
     SECURITY_MASTER = "security_master"
     TRADING_CALENDAR = "trading_calendar"
+
+
+class IntradayBarInterval(IntEnum):
+    FIVE_MINUTES = 5
+
+
+class IntradayBarRequest(BaseModel):
+    """Provider-neutral request for unadjusted A-share intraday bars."""
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str = Field(pattern=r"^\d{6}$")
+    start_at: AwareDatetime
+    end_at: AwareDatetime
+    interval_minutes: IntradayBarInterval = IntradayBarInterval.FIVE_MINUTES
+
+    @field_validator("start_at", "end_at")
+    @classmethod
+    def normalize_request_timestamps(cls, value: AwareDatetime) -> AwareDatetime:
+        return as_market_timezone(value)
+
+    @model_validator(mode="after")
+    def validate_request_window(self) -> "IntradayBarRequest":
+        if self.end_at < self.start_at:
+            raise ValueError("intraday request end cannot precede its start")
+        if self.start_at.date() != self.end_at.date():
+            raise ValueError("Phase 4 intraday requests must stay within one market date")
+        return self
+
+
+class IntradayBar(BaseModel):
+    """One normalized bar whose timestamp represents the completed bar end."""
+
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
+
+    symbol: str = Field(pattern=r"^\d{6}$")
+    interval_minutes: IntradayBarInterval = IntradayBarInterval.FIVE_MINUTES
+    ended_at: AwareDatetime
+    open: float = Field(gt=0)
+    high: float = Field(gt=0)
+    low: float = Field(gt=0)
+    close: float = Field(gt=0)
+    volume: float = Field(ge=0, description="Shares traded during the bar")
+    amount: float = Field(ge=0, description="RMB turnover during the bar")
+    provider: str = Field(min_length=1, max_length=128)
+    provider_timestamp: AwareDatetime | None = None
+    fetched_at: AwareDatetime
+
+    @field_validator("ended_at", "provider_timestamp", "fetched_at")
+    @classmethod
+    def normalize_bar_timestamps(cls, value: AwareDatetime | None) -> AwareDatetime | None:
+        return None if value is None else as_market_timezone(value)
+
+    @model_validator(mode="after")
+    def validate_price_and_time_evidence(self) -> "IntradayBar":
+        if self.high < max(self.open, self.close, self.low):
+            raise ValueError("intraday high must contain open, close, and low")
+        if self.low > min(self.open, self.close, self.high):
+            raise ValueError("intraday low must contain open, close, and high")
+        if self.ended_at > self.fetched_at:
+            raise ValueError("intraday bar cannot end after it was fetched")
+        return self
+
+
+class ProviderIntradayBarBatch(BaseModel):
+    """Normalized provider output; ordering and duplicate quality are evaluated downstream."""
+
+    model_config = ConfigDict(frozen=True)
+
+    provider: str = Field(min_length=1, max_length=128)
+    request: IntradayBarRequest
+    bars: tuple[IntradayBar, ...]
+    raw_record_count: int = Field(ge=0)
+    normalization_issue_count: int = Field(default=0, ge=0)
+    provider_version: str | None = Field(default=None, max_length=128)
+    provider_metadata: dict[str, JsonValue] = Field(default_factory=dict)
+    fetched_at: AwareDatetime
+
+    @field_validator("fetched_at")
+    @classmethod
+    def normalize_fetched_at(cls, value: AwareDatetime) -> AwareDatetime:
+        return as_market_timezone(value)
+
+    @model_validator(mode="after")
+    def validate_batch_provenance(self) -> "ProviderIntradayBarBatch":
+        if len(self.bars) + self.normalization_issue_count != self.raw_record_count:
+            raise ValueError("every intraday provider row must be normalized or reported")
+        if any(bar.provider != self.provider for bar in self.bars):
+            raise ValueError("intraday bar provider must match its batch")
+        if any(bar.symbol != self.request.symbol for bar in self.bars):
+            raise ValueError("intraday bar symbol must match its request")
+        if any(bar.interval_minutes != self.request.interval_minutes for bar in self.bars):
+            raise ValueError("intraday bar interval must match its request")
+        if any(bar.fetched_at != self.fetched_at for bar in self.bars):
+            raise ValueError("intraday bar fetch timestamp must match its batch")
+        return self
 
 
 class SnapshotManifestStatus(StrEnum):

@@ -127,6 +127,25 @@ uv run tail-radar inspect --run-id <tail-radar-run-uuid>
 Repeating the same snapshot under `tail-radar-screen-v1` returns the existing run. Public APIs are
 read-only and cannot execute this command. See [Tail Radar documentation](tail-radar.md).
 
+## Manual OpenAI research diagnostic
+
+Normal development, CI, and tests do not need an OpenAI key. To make one deliberate paid research
+request, set a newly generated `OPENAI_API_KEY` only in the root `.env`, apply migrations, and run:
+
+```powershell
+Set-Location backend
+uv run alembic upgrade head
+uv run tail-radar research `
+  --candidate-id <candidate-uuid> `
+  --analysis-as-of "2026-08-28T14:35:00+08:00"
+```
+
+Do not pass keys on the command line and never use `VITE_*` for secrets. The command analyzes one
+candidate, prints structured JSON, and is not exposed by public HTTP routes. Identical attempts are
+cached before the external call; `--force` deliberately creates another paid attempt. Provider
+timeouts, rate limits, API errors, invalid structured output, and no-evidence results remain local
+to that candidate and do not change the Tail Radar run.
+
 ## Adding work
 
 1. Read `AGENTS.md`, relevant architecture docs, and accepted ADRs.

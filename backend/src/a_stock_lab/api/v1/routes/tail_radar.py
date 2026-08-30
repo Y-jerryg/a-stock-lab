@@ -95,4 +95,8 @@ def candidate_detail(
             message="The Tail Radar candidate was not found.",
             status_code=status.HTTP_404_NOT_FOUND,
         )
-    return TailRadarCandidateDetailResponse.from_data(candidate)
+    return TailRadarCandidateDetailResponse.from_data(
+        candidate,
+        service.get_latest_intraday_analysis(candidate_id),
+        service.get_latest_research(candidate_id),
+    )

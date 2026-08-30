@@ -26,8 +26,10 @@ from a_stock_lab.shared.market_data.execution_models import (
 from a_stock_lab.shared.market_data.execution_service import FullMarketSnapshotExecutionEngine
 from a_stock_lab.shared.market_data.models import (
     FullMarketSnapshot,
+    IntradayBarRequest,
     MarketDataCapability,
     MarketSnapshotRecord,
+    ProviderIntradayBarBatch,
     ProviderSnapshotBatch,
     SnapshotQualityThresholds,
 )
@@ -71,6 +73,9 @@ class FakeProvider:
             ),
             provider_metadata={"source": "fixture"},
         )
+
+    def fetch_intraday_bars(self, request: IntradayBarRequest) -> ProviderIntradayBarBatch:
+        raise AssertionError(f"unexpected intraday request: {request}")
 
 
 class FakeCalendar:

@@ -7,6 +7,10 @@ from fastapi.testclient import TestClient
 
 from a_stock_lab.api.v1.services.tail_radar import get_tail_radar_query_service
 from a_stock_lab.core.time import MARKET_TIME_ZONE
+from a_stock_lab.features.tail_radar.application.intraday_models import (
+    TailRadarIntradayAnalysisData,
+    TailRadarIntradayAnalysisPayload,
+)
 from a_stock_lab.features.tail_radar.application.models import (
     TailRadarCandidateData,
     TailRadarCandidatePage,
@@ -15,6 +19,18 @@ from a_stock_lab.features.tail_radar.application.models import (
     TailRadarRunPage,
 )
 from a_stock_lab.features.tail_radar.application.queries import TailRadarQueryService
+from a_stock_lab.features.tail_radar.application.research_models import (
+    ResearchTokenUsage,
+    TailRadarResearchData,
+    TailRadarResearchPayload,
+    TailRadarResearchStatus,
+)
+from a_stock_lab.features.tail_radar.domain.intraday import (
+    INTRADAY_CALCULATION_VERSION,
+    IntradayFeatureConfiguration,
+    IntradayFeatureEngine,
+)
+from a_stock_lab.features.tail_radar.domain.research import ResearchEvidenceQuality
 from a_stock_lab.features.tail_radar.domain.screening import (
     TAIL_RADAR_SCREENING_RULE_VERSION,
     TailRadarDecisionOutcome,
@@ -24,7 +40,13 @@ from a_stock_lab.features.tail_radar.domain.screening import (
     TailRadarSnapshotEvidence,
 )
 from a_stock_lab.shared.execution.models import RunStatus
-from a_stock_lab.shared.market_data.models import AShareExchange, MarketSnapshotRecord
+from a_stock_lab.shared.market_data.models import (
+    AShareExchange,
+    IntradayBar,
+    IntradayBarRequest,
+    MarketSnapshotRecord,
+    ProviderIntradayBarBatch,
+)
 
 INTENDED = datetime(2026, 8, 28, 14, 30, tzinfo=MARKET_TIME_ZONE)
 FETCH_STARTED = INTENDED + timedelta(seconds=1)
@@ -35,6 +57,8 @@ RUN_ID = UUID("11111111-1111-1111-1111-111111111111")
 SNAPSHOT_ID = UUID("22222222-2222-2222-2222-222222222222")
 SNAPSHOT_RUN_ID = UUID("33333333-3333-3333-3333-333333333333")
 CANDIDATE_ID = UUID("44444444-4444-4444-4444-444444444444")
+ANALYSIS_ID = UUID("55555555-5555-5555-5555-555555555555")
+ANALYSIS_AS_OF = datetime(2026, 8, 28, 14, 35, tzinfo=MARKET_TIME_ZONE)
 
 
 def run_data() -> TailRadarRunData:
@@ -102,6 +126,119 @@ def candidate_data() -> TailRadarCandidateData:
     )
 
 
+def intraday_analysis_data() -> TailRadarIntradayAnalysisData:
+    candidate = candidate_data()
+    request = IntradayBarRequest(
+        symbol=candidate.symbol,
+        start_at=datetime(2026, 8, 28, 9, 30, tzinfo=MARKET_TIME_ZONE),
+        end_at=ANALYSIS_AS_OF,
+    )
+    bar = IntradayBar(
+        symbol=candidate.symbol,
+        ended_at=ANALYSIS_AS_OF,
+        open=10.2,
+        high=10.3,
+        low=10.2,
+        close=10.25,
+        volume=10_000,
+        amount=102_500,
+        provider="fixture-intraday",
+        fetched_at=ANALYSIS_AS_OF + timedelta(seconds=1),
+    )
+    batch = ProviderIntradayBarBatch(
+        provider="fixture-intraday",
+        request=request,
+        bars=(bar,),
+        raw_record_count=1,
+        provider_version="fixture-1",
+        fetched_at=ANALYSIS_AS_OF + timedelta(seconds=1),
+    )
+    engine = IntradayFeatureEngine()
+    computation = engine.calculate(batch=batch, analysis_as_of=ANALYSIS_AS_OF)
+    return TailRadarIntradayAnalysisData(
+        analysis_id=ANALYSIS_ID,
+        candidate_id=candidate.candidate_id,
+        run_id=candidate.run_id,
+        snapshot_id=candidate.snapshot_id,
+        symbol=candidate.symbol,
+        trade_date=candidate.trade_date,
+        analysis_as_of=ANALYSIS_AS_OF,
+        payload=TailRadarIntradayAnalysisPayload.from_computation(
+            symbol=candidate.symbol,
+            candidate_id=candidate.candidate_id,
+            source_run_id=candidate.run_id,
+            source_snapshot_id=candidate.snapshot_id,
+            source_candidate_as_of=candidate.as_of,
+            provider=batch.provider,
+            provider_version=batch.provider_version,
+            provider_metadata={},
+            provider_fetched_at=batch.fetched_at,
+            intraday_request=request,
+            configuration=IntradayFeatureConfiguration(),
+            computation=computation,
+        ),
+        created_at=ANALYSIS_AS_OF + timedelta(seconds=2),
+    )
+
+
+def research_data() -> TailRadarResearchData:
+    candidate = candidate_data()
+    payload = TailRadarResearchPayload(
+        concise_summary="No useful web evidence was verified at the requested cutoff.",
+        verified_facts=(),
+        likely_drivers=(),
+        company_context=(),
+        sector_context=(),
+        market_context=(),
+        positive_factors=(),
+        risk_factors=(),
+        unresolved_questions=("Publication timing remains unresolved.",),
+        evidence_quality=ResearchEvidenceQuality.INSUFFICIENT,
+        confidence=0,
+        symbol=candidate.symbol,
+        candidate_id=candidate.candidate_id,
+        source_run_id=candidate.run_id,
+        source_snapshot_id=candidate.snapshot_id,
+        source_candidate_as_of=candidate.as_of,
+        analysis_as_of=ANALYSIS_AS_OF,
+        provider="fixture-research",
+        requested_model="fixture-model",
+        model_identifier="fixture-model-snapshot",
+        provider_response_id="resp_fixture",
+        prompt_sha256="b" * 64,
+        source_references=(),
+        token_usage=ResearchTokenUsage(input_tokens=10, output_tokens=5, total_tokens=15),
+        provider_metadata={"api": "responses"},
+    )
+    return TailRadarResearchData(
+        research_id=UUID("66666666-6666-4666-8666-666666666666"),
+        artifact_id=UUID("77777777-7777-4777-8777-777777777777"),
+        candidate_id=candidate.candidate_id,
+        run_id=candidate.run_id,
+        snapshot_id=candidate.snapshot_id,
+        symbol=candidate.symbol,
+        trade_date=candidate.trade_date,
+        analysis_as_of=ANALYSIS_AS_OF,
+        prompt_version=payload.prompt_version,
+        prompt_sha256=payload.prompt_sha256,
+        provider=payload.provider,
+        requested_model=payload.requested_model,
+        actual_model=payload.model_identifier,
+        provider_response_id=payload.provider_response_id,
+        status=TailRadarResearchStatus.NO_EVIDENCE,
+        is_forced=False,
+        base_research_id=None,
+        token_usage=payload.token_usage,
+        error_code=None,
+        actual_started_at=ANALYSIS_AS_OF + timedelta(seconds=1),
+        actual_finished_at=ANALYSIS_AS_OF + timedelta(seconds=2),
+        created_at=ANALYSIS_AS_OF + timedelta(seconds=2),
+        updated_at=ANALYSIS_AS_OF + timedelta(seconds=2),
+        payload=payload,
+        sources=(),
+    )
+
+
 class FakeQueryService:
     def latest_run(self) -> TailRadarRunData | None:
         return run_data()
@@ -125,6 +262,14 @@ class FakeQueryService:
 
     def get_candidate(self, candidate_id: UUID) -> TailRadarCandidateData | None:
         return candidate_data() if candidate_id == CANDIDATE_ID else None
+
+    def get_latest_intraday_analysis(self, candidate_id: UUID) -> TailRadarIntradayAnalysisData:
+        assert candidate_id == CANDIDATE_ID
+        return intraday_analysis_data()
+
+    def get_latest_research(self, candidate_id: UUID) -> TailRadarResearchData:
+        assert candidate_id == CANDIDATE_ID
+        return research_data()
 
 
 def override_service(app: FastAPI) -> None:
@@ -180,6 +325,28 @@ def test_public_candidate_reads_preserve_explanatory_snapshot_evidence(
     }
     assert payload["snapshot_evidence"]["actual_fetch_finished_at"].endswith("+08:00")
     assert "storage_key" not in payload["snapshot_evidence"]
+    intraday = payload["intraday_analysis"]
+    assert intraday["calculation_version"] == INTRADAY_CALCULATION_VERSION
+    assert intraday["source_run_id"] == str(RUN_ID)
+    assert intraday["source_snapshot_id"] == str(SNAPSHOT_ID)
+    assert intraday["latest_bar_used"]["ended_at"].endswith("+08:00")
+    assert intraday["latest_bar_used"]["ended_at"] <= intraday["analysis_as_of"]
+    research = payload["web_research"]
+    assert research["status"] == "no_evidence"
+    assert research["evidence_quality"] == "insufficient"
+    assert research["prompt_version"] == "tail-radar-research-v1"
+    assert "provider_response_id" not in research
+    assert "token_usage" not in research
+
+
+def test_public_intraday_schema_does_not_expose_internal_domain_models(app: FastAPI) -> None:
+    schemas = app.openapi()["components"]["schemas"]
+
+    assert "IntradayBarResponse" in schemas
+    assert "IntradayDataQualityResponse" in schemas
+    assert "IntradayBar" not in schemas
+    assert "IntradayDataQualityReport" not in schemas
+    assert "IntradayFeatureConfiguration" not in schemas
 
 
 def test_public_tail_radar_reads_return_typed_not_found_errors(

@@ -6,8 +6,10 @@ tooling. Phase 1 adds provider-neutral market-data infrastructure, an isolated A
 quality-gated full-market snapshots, and opt-in Parquet diagnostics. Phase 2 adds the manual,
 point-in-time execution engine, provider-neutral trading calendar, PostgreSQL snapshot manifests,
 and idempotent official-run semantics. Phase 3 adds the deterministic, point-in-time
-`tail-radar-screen-v1` rule, auditable candidate artifacts, and public read-only result APIs. It
-deliberately contains no recurring scheduler, technical indicators, AI calls, or simulated results.
+`tail-radar-screen-v1` rule, auditable candidate artifacts, and public read-only result APIs. Phase 4
+adds versioned point-in-time intraday features without a trading score or prediction. Phase 5 adds
+backend-only, point-in-time OpenAI web research with separately persisted sources and paid-call
+idempotency. It deliberately contains no recurring scheduler or simulated results.
 
 ## Modules
 
@@ -134,12 +136,32 @@ After an official snapshot has been persisted, screen that immutable snapshot ex
 Set-Location backend
 uv run tail-radar execute --snapshot-id <snapshot-uuid>
 uv run tail-radar inspect --run-id <tail-radar-run-uuid>
+uv run tail-radar analyze-intraday --candidate-id <candidate-uuid> --analysis-as-of "2026-08-28T14:35:00+08:00"
 ```
 
 Version `tail-radar-screen-v1` includes a valid normalized record only when
 `2.00 <= pct_change <= 3.00`. Repeating the same snapshot/rule pair is idempotent. The command makes
 no live provider or AI call; public `/api/v1/tail-radar` routes only read persisted runs and
 candidates. See [Tail Radar documentation](docs/tail-radar.md).
+
+## Manual OpenAI web research diagnostic
+
+This is an explicit paid operation for one persisted candidate. Put a newly generated API key only
+in the ignored root `.env`; never put it in source, `VITE_*`, a command argument, or frontend code:
+
+```powershell
+Set-Location backend
+uv run alembic upgrade head
+uv run tail-radar research `
+  --candidate-id <candidate-uuid> `
+  --analysis-as-of "2026-08-28T14:35:00+08:00"
+```
+
+The identity `(candidate, run, analysis_as_of, prompt_version, provider, requested_model)` is
+claimed in PostgreSQL before the Responses API call. Repeating it returns the persisted result,
+including a failed or no-evidence attempt, without another paid call. Use `--force` only when a new
+paid attempt is intentional. Normal tests mock OpenAI and never use the network. See
+[Tail Radar documentation](docs/tail-radar.md) for timestamp and source-integrity rules.
 
 ## Quality commands
 

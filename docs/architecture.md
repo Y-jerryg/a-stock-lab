@@ -23,6 +23,13 @@ flowchart LR
   TailRadar["Tail Radar screening service"] -->|"read official snapshot"| Postgres
   TailRadar -->|"verify + read rows"| Parquet
   TailRadar -->|"versioned candidate artifacts"| Shared
+  Intraday["Point-in-time intraday feature engine"] -->|"normalized 5-minute bars"| MarketData
+  Intraday -->|"versioned feature artifacts"| Shared
+  Intraday -->|"candidate provenance"| TailRadar
+  AIResearch["Point-in-time AI research service"] -->|"provider-neutral request"| OpenAIAdapter["OpenAI Responses adapter"]
+  OpenAIAdapter -->|"web search"| Web[(Public web sources)]
+  AIResearch -->|"research artifact + source records"| Shared
+  AIResearch -->|"candidate + deterministic evidence"| TailRadar
   Internal["Future authenticated operations"] -.->|"separate internal boundary"| API
 ```
 
@@ -45,14 +52,21 @@ Expensive actions such as market refreshes, OpenAI calls, quantitative runs, and
 must not be added as anonymous public actions. Authentication is intentionally deferred; therefore
 the operational router is not mounted.
 
-The Phase 1 live diagnostic, Phase 2 point-in-time execution CLI, and Phase 3 Tail Radar CLI are
+The Phase 1 live diagnostic, Phase 2 point-in-time execution CLI, and Phase 3/4 Tail Radar CLI are
 explicitly invoked operations rather than API routes or schedulers. The snapshot execution engine
-claims an official logical
-run before network work, resolves the trade date through `TradingCalendar`, persists immutable rows
+claims an official logical run before network work, resolves the trade date through
+`TradingCalendar`, persists immutable rows
 to Parquet, and transactionally registers the manifest with the successful run transition. Public
 request handling never triggers market refreshes or screening. Tail Radar reads one verified
 official Parquet snapshot, applies a versioned deterministic domain rule, and transactionally
 publishes candidates as `ResearchArtifact` records plus feature-specific relational links.
+Phase 4's internal candidate-analysis command fetches provider-neutral intraday bars, enforces the
+explicit `analysis_as_of` cutoff in domain code, and publishes a separate deterministic feature
+artifact. It does not alter screening membership. Phase 5's separate application service consumes
+persisted candidate and eligible deterministic evidence, then delegates a provider-neutral request
+to the OpenAI adapter. Only that adapter imports the SDK. It uses the Responses API, web search, and
+strict structured output; the deterministic screening and feature paths never import or invoke AI.
+The paid operation is CLI-only and claims its cache identity before making the external request.
 
 ## Frontend boundaries
 
@@ -75,6 +89,12 @@ provider time, and persistence time. The official identity is unique by job type
 intended time, and execution version. Forced reruns are non-official and remain explicitly linked.
 Tail Radar candidate `as_of` is the source snapshot's actual fetch-finish time; its evidence also
 preserves the distinct intended snapshot time.
+Intraday analysis separately preserves its own `analysis_as_of`; no bar ending later than that
+boundary may enter quality evaluation or feature calculation.
+AI research has its own aware `analysis_as_of`. Prompts enforce that publication time—not later
+retrieval time—governs whether information was available at that boundary. Persisted source records
+distinguish verified, uncertain, and unavailable publication timestamps and explicitly classify
+availability at the historical boundary.
 
 ## Observability
 

@@ -13,6 +13,7 @@ from a_stock_lab.shared.market_data.errors import (
 )
 from a_stock_lab.shared.market_data.models import (
     AShareExchange,
+    IntradayBarRequest,
     MarketDataCapability,
     MarketSnapshotRecord,
     NormalizationIssueCode,
@@ -38,6 +39,15 @@ EXPECTED_COLUMNS = [
     "市净率",
     "总市值",
     "流通市值",
+]
+INTRADAY_COLUMNS: list[object] = [
+    "时间",
+    "开盘",
+    "收盘",
+    "最高",
+    "最低",
+    "成交量",
+    "成交额",
 ]
 
 
@@ -92,7 +102,12 @@ def test_adapter_normalizes_provider_columns_without_leaking_them() -> None:
 
     batch = provider.fetch_full_market_snapshot()
 
-    assert provider.capabilities == frozenset({MarketDataCapability.FULL_MARKET_SNAPSHOT})
+    assert provider.capabilities == frozenset(
+        {
+            MarketDataCapability.FULL_MARKET_SNAPSHOT,
+            MarketDataCapability.INTRADAY_BARS,
+        }
+    )
     assert batch.raw_record_count == 1
     assert batch.normalization_issues == ()
     assert batch.provider_metadata["provider_timestamp_available"] is False
@@ -211,3 +226,78 @@ def test_adapter_rejects_upstream_schema_drift() -> None:
 
     with pytest.raises(ProviderInvalidResponseError, match="missing required columns"):
         provider.fetch_full_market_snapshot()
+
+
+def test_adapter_normalizes_unadjusted_five_minute_bars_and_share_volume() -> None:
+    captured: list[IntradayBarRequest] = []
+
+    def fetch_intraday(request: IntradayBarRequest) -> object:
+        captured.append(request)
+        return FakeFrame(
+            [
+                {
+                    "时间": "2026-08-28 14:30:00",
+                    "开盘": 10.20,
+                    "收盘": 10.25,
+                    "最高": 10.30,
+                    "最低": 10.18,
+                    "成交量": 1_234,
+                    "成交额": 1_264_850,
+                }
+            ],
+            columns=INTRADAY_COLUMNS,
+        )
+
+    request = IntradayBarRequest(
+        symbol="600000",
+        start_at=datetime(2026, 8, 28, 9, 30, tzinfo=MARKET_TIME_ZONE),
+        end_at=fixed_clock(),
+    )
+    provider = AkShareMarketDataProvider(
+        intraday_fetcher=fetch_intraday,
+        clock=fixed_clock,
+    )
+
+    batch = provider.fetch_intraday_bars(request)
+
+    assert captured == [request]
+    assert batch.request == request
+    assert batch.normalization_issue_count == 0
+    assert batch.provider_metadata["adjustment"] == "none"
+    assert batch.provider_metadata["bar_timestamp_semantics"] == "bar_end"
+    bar = batch.bars[0]
+    assert bar.ended_at == fixed_clock()
+    assert bar.volume == 123_400
+    assert bar.amount == 1_264_850
+    assert bar.provider == "akshare"
+
+
+def test_adapter_reports_malformed_intraday_rows_without_fabricating_bars() -> None:
+    provider = AkShareMarketDataProvider(
+        intraday_fetcher=lambda _: FakeFrame(
+            [
+                {
+                    "时间": "not-a-time",
+                    "开盘": 10,
+                    "收盘": 10,
+                    "最高": 10,
+                    "最低": 10,
+                    "成交量": 1,
+                    "成交额": 10,
+                }
+            ],
+            columns=INTRADAY_COLUMNS,
+        ),
+        clock=fixed_clock,
+    )
+    request = IntradayBarRequest(
+        symbol="600000",
+        start_at=datetime(2026, 8, 28, 9, 30, tzinfo=MARKET_TIME_ZONE),
+        end_at=fixed_clock(),
+    )
+
+    batch = provider.fetch_intraday_bars(request)
+
+    assert batch.bars == ()
+    assert batch.raw_record_count == 1
+    assert batch.normalization_issue_count == 1

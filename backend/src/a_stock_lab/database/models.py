@@ -2,6 +2,9 @@
 
 from a_stock_lab.features.tail_radar.adapters.persistence_models import (
     TailRadarCandidateRecord,
+    TailRadarIntradayAnalysisRecord,
+    TailRadarResearchRecord,
+    TailRadarResearchSourceRecord,
     TailRadarRunRecord,
 )
 from a_stock_lab.shared.artifacts.models import ResearchArtifact
@@ -13,5 +16,8 @@ __all__ = [
     "MarketSnapshotManifestRecord",
     "ResearchArtifact",
     "TailRadarCandidateRecord",
+    "TailRadarIntradayAnalysisRecord",
+    "TailRadarResearchRecord",
+    "TailRadarResearchSourceRecord",
     "TailRadarRunRecord",
 ]

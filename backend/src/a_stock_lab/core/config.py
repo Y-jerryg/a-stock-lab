@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AnyHttpUrl, Field, field_validator
+from pydantic import AnyHttpUrl, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 
@@ -24,7 +24,12 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = Field(default=8000, ge=1, le=65535)
     cors_origins: list[AnyHttpUrl] = Field(default_factory=list)
-    openai_api_key: str | None = None
+    openai_api_key: SecretStr | None = None
+    openai_research_model: str = "gpt-5.5-2026-04-23"
+    openai_research_timeout_seconds: float = Field(default=90, gt=0, le=300)
+    openai_research_max_output_tokens: int = Field(default=6_000, ge=500, le=20_000)
+    openai_research_max_web_search_calls: int = Field(default=8, ge=1, le=20)
+    openai_research_search_context_size: Literal["low", "medium", "high"] = "medium"
     market_data_api_key: str | None = None
     runtime_data_dir: Path = Path("../runtime")
     market_data_retry_attempts: int = Field(default=2, ge=1, le=3)

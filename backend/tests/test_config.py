@@ -1,4 +1,8 @@
+import pytest
+
 from a_stock_lab.core.config import Settings
+from a_stock_lab.features.tail_radar.domain.errors import TailRadarResearchConfigurationError
+from a_stock_lab.features.tail_radar.factory import build_tail_radar_research_service
 
 
 def test_cors_origins_are_normalized_for_exact_browser_matching() -> None:
@@ -30,3 +34,14 @@ def test_explicit_database_url_takes_precedence() -> None:
     assert settings.resolved_database_url == (
         "postgresql+psycopg://user:pass@postgres:5432/database"
     )
+
+
+def test_openai_key_is_secret_and_research_requires_explicit_backend_configuration() -> None:
+    settings = Settings(openai_api_key="test-secret")
+
+    assert "test-secret" not in repr(settings)
+
+    with pytest.raises(TailRadarResearchConfigurationError, match="OPENAI_API_KEY"):
+        build_tail_radar_research_service(Settings(openai_api_key=None))
+    with pytest.raises(TailRadarResearchConfigurationError, match="OPENAI_API_KEY"):
+        build_tail_radar_research_service(Settings(openai_api_key="   "))

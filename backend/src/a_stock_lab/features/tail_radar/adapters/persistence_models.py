@@ -1,14 +1,21 @@
 import uuid
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
+    Date,
+    DateTime,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
     Integer,
     String,
+    Text,
     UniqueConstraint,
+    func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -91,6 +98,13 @@ class TailRadarCandidateRecord(Base):
             "symbol",
             name="uq_tail_radar_candidates_run_symbol",
         ),
+        UniqueConstraint(
+            "candidate_id",
+            "run_id",
+            "snapshot_id",
+            "symbol",
+            name="uq_tail_radar_candidates_analysis_source",
+        ),
         CheckConstraint("symbol ~ '^[0-9]{6}$'", name="symbol_format"),
         Index("ix_tail_radar_candidates_snapshot_symbol", "snapshot_id", "symbol"),
     )
@@ -103,3 +117,211 @@ class TailRadarCandidateRecord(Base):
     run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     snapshot_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     symbol: Mapped[str] = mapped_column(String(6), nullable=False)
+
+
+class TailRadarIntradayAnalysisRecord(Base):
+    """Relational provenance for one versioned candidate intraday feature artifact."""
+
+    __tablename__ = "tail_radar_intraday_analyses"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["candidate_id", "run_id", "snapshot_id", "symbol"],
+            [
+                "tail_radar_candidates.candidate_id",
+                "tail_radar_candidates.run_id",
+                "tail_radar_candidates.snapshot_id",
+                "tail_radar_candidates.symbol",
+            ],
+            name="fk_tail_radar_intraday_analysis_candidate_source",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "candidate_id",
+            "analysis_as_of",
+            "calculation_version",
+            name="uq_tail_radar_intraday_candidate_as_of_version",
+        ),
+        CheckConstraint("symbol ~ '^[0-9]{6}$'", name="symbol_format"),
+        Index(
+            "ix_tail_radar_intraday_candidate_as_of",
+            "candidate_id",
+            "analysis_as_of",
+        ),
+    )
+
+    analysis_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("research_artifacts.artifact_id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    candidate_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    snapshot_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    symbol: Mapped[str] = mapped_column(String(6), nullable=False)
+    analysis_as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    calculation_version: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class TailRadarResearchRecord(Base):
+    """One cached or explicitly forced paid web-research attempt for a candidate."""
+
+    __tablename__ = "tail_radar_research_analyses"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["candidate_id", "run_id", "snapshot_id", "symbol"],
+            [
+                "tail_radar_candidates.candidate_id",
+                "tail_radar_candidates.run_id",
+                "tail_radar_candidates.snapshot_id",
+                "tail_radar_candidates.symbol",
+            ],
+            name="fk_tail_radar_research_candidate_source",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("symbol ~ '^[0-9]{6}$'", name="symbol_format"),
+        CheckConstraint(
+            "status IN ('running', 'succeeded', 'no_evidence', 'failed')",
+            name="status_valid",
+        ),
+        CheckConstraint(
+            "input_tokens >= 0 AND output_tokens >= 0 "
+            "AND total_tokens >= input_tokens + output_tokens",
+            name="token_counts_non_negative",
+        ),
+        CheckConstraint(
+            "actual_finished_at IS NULL OR actual_finished_at >= actual_started_at",
+            name="timing_order",
+        ),
+        CheckConstraint(
+            "(NOT is_forced AND base_research_id IS NULL) OR is_forced",
+            name="forced_lineage",
+        ),
+        CheckConstraint(
+            "base_research_id IS NULL OR base_research_id <> research_id",
+            name="lineage_not_self",
+        ),
+        CheckConstraint(
+            "prompt_sha256 ~ '^[0-9a-f]{64}$'",
+            name="prompt_hash_format",
+        ),
+        CheckConstraint(
+            "(status = 'running' AND actual_finished_at IS NULL "
+            "AND artifact_id IS NULL AND error_code IS NULL) OR "
+            "(status = 'failed' AND actual_finished_at IS NOT NULL "
+            "AND artifact_id IS NULL AND error_code IS NOT NULL) OR "
+            "(status IN ('succeeded', 'no_evidence') AND actual_finished_at IS NOT NULL "
+            "AND artifact_id IS NOT NULL AND error_code IS NULL)",
+            name="lifecycle_consistent",
+        ),
+        Index(
+            "uq_tail_radar_research_cached_identity",
+            "candidate_id",
+            "run_id",
+            "analysis_as_of",
+            "prompt_version",
+            "provider",
+            "requested_model",
+            unique=True,
+            postgresql_where=text("is_forced = false"),
+        ),
+        Index(
+            "ix_tail_radar_research_candidate_as_of",
+            "candidate_id",
+            "analysis_as_of",
+        ),
+    )
+
+    research_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    artifact_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("research_artifacts.artifact_id", ondelete="RESTRICT"),
+        unique=True,
+    )
+    candidate_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    snapshot_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    symbol: Mapped[str] = mapped_column(String(6), nullable=False)
+    trade_date: Mapped[date] = mapped_column(Date, nullable=False)
+    analysis_as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    prompt_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider: Mapped[str] = mapped_column(String(128), nullable=False)
+    requested_model: Mapped[str] = mapped_column(String(128), nullable=False)
+    actual_model: Mapped[str | None] = mapped_column(String(128))
+    provider_response_id: Mapped[str | None] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    is_forced: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    base_research_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tail_radar_research_analyses.research_id", ondelete="RESTRICT"),
+    )
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_code: Mapped[str | None] = mapped_column(String(128))
+    actual_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    actual_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class TailRadarResearchSourceRecord(Base):
+    """Source metadata stored independently from the research artifact payload."""
+
+    __tablename__ = "tail_radar_research_sources"
+    __table_args__ = (
+        UniqueConstraint("research_id", "url", name="uq_tail_radar_research_source_url"),
+        CheckConstraint(
+            "publication_timestamp_status IN ('verified', 'uncertain', 'unavailable')",
+            name="publication_status",
+        ),
+        CheckConstraint(
+            "availability_at_as_of IN "
+            "('available_at_as_of', 'published_after_as_of', 'uncertain_at_as_of')",
+            name="availability_status",
+        ),
+        CheckConstraint(
+            "(publication_timestamp_status = 'verified' AND published_at IS NOT NULL) "
+            "OR publication_timestamp_status = 'uncertain' "
+            "OR (publication_timestamp_status = 'unavailable' AND published_at IS NULL)",
+            name="publication_timestamp",
+        ),
+        CheckConstraint(
+            "(availability_at_as_of IN ('available_at_as_of', 'published_after_as_of') "
+            "AND publication_timestamp_status = 'verified') OR "
+            "(availability_at_as_of = 'uncertain_at_as_of' "
+            "AND publication_timestamp_status <> 'verified')",
+            name="availability_timestamp",
+        ),
+        CheckConstraint(
+            "published_at IS NULL OR published_at <= retrieved_at",
+            name="publication_retrieval_order",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(relationship_claim_ids) = 'array'",
+            name="claim_relationships_array",
+        ),
+        Index("ix_tail_radar_research_sources_research_id", "research_id"),
+    )
+
+    source_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    research_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tail_radar_research_analyses.research_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str | None] = mapped_column(String(512))
+    publisher_domain: Mapped[str] = mapped_column(String(253), nullable=False)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    publication_timestamp_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    availability_at_as_of: Mapped[str] = mapped_column(String(32), nullable=False)
+    retrieved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    relationship_claim_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

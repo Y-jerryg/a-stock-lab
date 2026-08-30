@@ -3,16 +3,16 @@
 Phase 1 implements the provider boundary and full-market snapshot ingestion infrastructure. Phase 2
 adds manual point-in-time execution, a provider-neutral trading calendar, Parquet checksums, and
 PostgreSQL run/manifest persistence. Phase 3 consumes verified official snapshots for deterministic
-Tail Radar screening; it does not change the provider boundary or fetch data during screening.
-Recurring scheduling, intraday history, daily history, and security-master ingestion remain
-unimplemented.
+Tail Radar screening. Phase 4 adds provider-neutral unadjusted five-minute bars for explicit
+candidate analysis. Recurring scheduling, bulk intraday persistence, daily history, and
+security-master ingestion remain unimplemented.
 
 ## Dependency boundary
 
 `MarketDataProvider` is the application-facing contract. Its capability vocabulary reserves
 full-market snapshots, intraday bars, daily bars, security master, and trading calendar without
-pretending those unimplemented feeds exist. `AkShareMarketDataProvider` currently declares and
-implements only `full_market_snapshot`.
+pretending unsupported feeds exist. `AkShareMarketDataProvider` declares and implements
+`full_market_snapshot` and `intraday_bars`.
 
 All AKShare imports, Chinese source-column mappings, SDK exception handling, and provider metadata
 live in the `shared/market_data/adapters/akshare*.py` adapter modules. Provider-neutral service and
@@ -167,3 +167,17 @@ date. These are manual operational commands; no scheduler or public execution AP
 Phase 3's separate `tail-radar` command reads one registered Parquet artifact by snapshot UUID,
 verifies its checksum and embedded manifest, and makes no provider or network request. See
 [Tail Radar documentation](tail-radar.md).
+
+## Intraday bars
+
+Phase 4 uses AKShare's documented `stock_zh_a_hist_min_em` adapter operation with `period="5"` and
+no price adjustment. Provider timestamps are interpreted as completed bar ends in
+`Asia/Shanghai`. The adapter maps Chinese columns into normalized OHLC, volume, and amount fields;
+AKShare documents volume in lots, so the adapter converts it to shares while retaining amount in
+RMB. See the [official AKShare stock-data documentation](https://akshare.akfamily.xyz/data/stock/stock.html).
+
+The provider request ends at the explicit analysis `as_of`, but the domain engine independently
+filters every normalized bar with `ended_at > analysis_as_of`. This defense remains mandatory even
+when the upstream claims to honor its end parameter. Intraday rows are not persisted as a new bulk
+dataset in this phase; the feature artifact preserves provider/request provenance and the latest bar
+actually used.

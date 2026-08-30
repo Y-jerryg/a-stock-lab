@@ -3,7 +3,9 @@ from typing import Protocol, runtime_checkable
 
 from a_stock_lab.shared.market_data.models import (
     FullMarketSnapshot,
+    IntradayBarRequest,
     MarketDataCapability,
+    ProviderIntradayBarBatch,
     ProviderSnapshotBatch,
 )
 from a_stock_lab.shared.market_data.persistence_schemas import SnapshotStorageResult
@@ -21,6 +23,8 @@ class MarketDataProvider(Protocol):
     def capabilities(self) -> frozenset[MarketDataCapability]: ...
 
     def fetch_full_market_snapshot(self) -> ProviderSnapshotBatch: ...
+
+    def fetch_intraday_bars(self, request: IntradayBarRequest) -> ProviderIntradayBarBatch: ...
 
 
 class MarketSnapshotStorage(Protocol):

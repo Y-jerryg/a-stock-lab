@@ -8,6 +8,7 @@ dependencies = [
   "akshare>=1.18.94,<1.19",
   "alembic>=1.16,<2",
   "fastapi>=0.116,<1",
+  "openai>=2.0,<3",
   "pyarrow>=20,<24",
   "pydantic>=2.11,<3",
   "pydantic-settings>=2.10,<3",

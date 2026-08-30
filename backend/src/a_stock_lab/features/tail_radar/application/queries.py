@@ -1,12 +1,16 @@
 from uuid import UUID
 
 from a_stock_lab.features.tail_radar.application.contracts import TailRadarRepository
+from a_stock_lab.features.tail_radar.application.intraday_models import (
+    TailRadarIntradayAnalysisData,
+)
 from a_stock_lab.features.tail_radar.application.models import (
     TailRadarCandidateData,
     TailRadarCandidatePage,
     TailRadarRunData,
     TailRadarRunPage,
 )
+from a_stock_lab.features.tail_radar.application.research_models import TailRadarResearchData
 
 
 class TailRadarQueryService:
@@ -29,3 +33,11 @@ class TailRadarQueryService:
 
     def get_candidate(self, candidate_id: UUID) -> TailRadarCandidateData | None:
         return self._repository.get_candidate(candidate_id)
+
+    def get_latest_intraday_analysis(
+        self, candidate_id: UUID
+    ) -> TailRadarIntradayAnalysisData | None:
+        return self._repository.get_latest_intraday_analysis(candidate_id)
+
+    def get_latest_research(self, candidate_id: UUID) -> TailRadarResearchData | None:
+        return self._repository.get_latest_research(candidate_id)

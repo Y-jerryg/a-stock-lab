@@ -1,21 +1,55 @@
 import os
 from datetime import datetime, timedelta
+from typing import cast
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, delete
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from a_stock_lab.core.time import MARKET_TIME_ZONE
 from a_stock_lab.features.tail_radar.adapters.persistence_models import (
     TailRadarCandidateRecord,
+    TailRadarIntradayAnalysisRecord,
+    TailRadarResearchRecord,
+    TailRadarResearchSourceRecord,
     TailRadarRunRecord,
 )
 from a_stock_lab.features.tail_radar.adapters.postgres import PostgresTailRadarRepository
+from a_stock_lab.features.tail_radar.application.intraday_models import (
+    TailRadarIntradayAnalysisCreate,
+    TailRadarIntradayAnalysisPayload,
+)
 from a_stock_lab.features.tail_radar.application.models import (
     TAIL_RADAR_CANDIDATE_ARTIFACT_TYPE,
     TailRadarCandidateCreate,
     TailRadarCandidatePayload,
+)
+from a_stock_lab.features.tail_radar.application.research_models import (
+    ResearchTokenUsage,
+    TailRadarResearchClaimRequest,
+    TailRadarResearchCompletion,
+    TailRadarResearchPayload,
+    TailRadarResearchSourceCreate,
+    TailRadarResearchSourceReference,
+    TailRadarResearchStatus,
+)
+from a_stock_lab.features.tail_radar.domain.errors import (
+    TailRadarCommitUncertainError,
+    TailRadarPersistenceError,
+)
+from a_stock_lab.features.tail_radar.domain.intraday import (
+    INTRADAY_CALCULATION_VERSION,
+    IntradayFeatureConfiguration,
+    IntradayFeatureEngine,
+)
+from a_stock_lab.features.tail_radar.domain.research import (
+    PublicationTimestampStatus,
+    ResearchClaimClassification,
+    ResearchEvidenceQuality,
+    SourceAvailabilityAtAsOf,
+    TailRadarResearchClaim,
 )
 from a_stock_lab.features.tail_radar.domain.screening import (
     TAIL_RADAR_SCREENING_RULE_VERSION,
@@ -36,7 +70,10 @@ from a_stock_lab.shared.market_data.execution_models import (
     SnapshotRunKey,
 )
 from a_stock_lab.shared.market_data.models import (
+    IntradayBar,
+    IntradayBarRequest,
     MarketSnapshotRecord,
+    ProviderIntradayBarBatch,
     SnapshotManifestStatus,
     SnapshotQualityReport,
     SnapshotQualityThresholds,
@@ -63,6 +100,12 @@ def test_postgres_tail_radar_is_idempotent_and_persists_versioned_candidate_evid
     screen_finished = screen_started + timedelta(seconds=1)
     snapshot_id = uuid4()
     candidate_id = uuid4()
+    analysis_id = uuid4()
+    research_id = uuid4()
+    forced_research_id = uuid4()
+    other_provider_research_id = uuid4()
+    research_artifact_id = uuid4()
+    research_source_id = uuid4()
     second_snapshot_id = uuid4()
     wrong_job_snapshot_id = uuid4()
     source_run_id = None
@@ -209,6 +252,211 @@ def test_postgres_tail_radar_is_idempotent_and_persists_versioned_candidate_evid
         assert detail.payload.snapshot_record == record
         assert detail.payload.snapshot_evidence.snapshot_id == snapshot_id
 
+        analysis_as_of = intended + timedelta(minutes=5)
+        intraday_request = IntradayBarRequest(
+            symbol=record.symbol,
+            start_at=intended.replace(hour=9, minute=30),
+            end_at=analysis_as_of,
+        )
+        intraday_bar = IntradayBar(
+            symbol=record.symbol,
+            ended_at=analysis_as_of,
+            open=10.2,
+            high=10.3,
+            low=10.2,
+            close=10.25,
+            volume=10_000,
+            amount=102_500,
+            provider="fixture-intraday",
+            fetched_at=analysis_as_of + timedelta(seconds=1),
+        )
+        intraday_batch = ProviderIntradayBarBatch(
+            provider="fixture-intraday",
+            request=intraday_request,
+            bars=(intraday_bar,),
+            raw_record_count=1,
+            provider_version="fixture-1",
+            fetched_at=analysis_as_of + timedelta(seconds=1),
+        )
+        feature_engine = IntradayFeatureEngine()
+        computation = feature_engine.calculate(
+            batch=intraday_batch,
+            analysis_as_of=analysis_as_of,
+        )
+        analysis_create = TailRadarIntradayAnalysisCreate(
+            analysis_id=analysis_id,
+            candidate_id=candidate_id,
+            run_id=tail_run_id,
+            snapshot_id=snapshot_id,
+            symbol=record.symbol,
+            trade_date=intended.date(),
+            analysis_as_of=analysis_as_of,
+            payload=TailRadarIntradayAnalysisPayload.from_computation(
+                symbol=record.symbol,
+                candidate_id=candidate_id,
+                source_run_id=tail_run_id,
+                source_snapshot_id=snapshot_id,
+                source_candidate_as_of=fetch_finished,
+                provider=intraday_batch.provider,
+                provider_version=intraday_batch.provider_version,
+                provider_metadata={},
+                provider_fetched_at=intraday_batch.fetched_at,
+                intraday_request=intraday_request,
+                configuration=IntradayFeatureConfiguration(),
+                computation=computation,
+            ),
+        )
+
+        class CommitFailingSession(Session):
+            def commit(self) -> None:
+                raise SQLAlchemyError("simulated uncertain commit")
+
+        failing_factory = sessionmaker(
+            bind=engine,
+            expire_on_commit=False,
+            class_=CommitFailingSession,
+        )
+        with pytest.raises(TailRadarCommitUncertainError, match="outcome is uncertain"):
+            PostgresTailRadarRepository(
+                cast(sessionmaker[Session], failing_factory)
+            ).save_intraday_analysis(analysis_create)
+
+        saved_analysis, created = repository.save_intraday_analysis(analysis_create)
+        replayed_analysis, replay_created = repository.save_intraday_analysis(analysis_create)
+        latest_analysis = repository.get_latest_intraday_analysis(candidate_id)
+
+        assert created is True
+        assert replay_created is False
+        assert replayed_analysis.analysis_id == saved_analysis.analysis_id
+        assert latest_analysis is not None
+        assert latest_analysis.analysis_id == analysis_id
+        assert latest_analysis.payload.calculation_version == INTRADAY_CALCULATION_VERSION
+        assert latest_analysis.payload.latest_bar_used == intraday_bar
+
+        research_started = analysis_as_of + timedelta(seconds=2)
+        research_finished = research_started + timedelta(seconds=2)
+        research_request = TailRadarResearchClaimRequest(
+            research_id=research_id,
+            candidate_id=candidate_id,
+            run_id=tail_run_id,
+            snapshot_id=snapshot_id,
+            symbol=record.symbol,
+            trade_date=intended.date(),
+            analysis_as_of=analysis_as_of,
+            prompt_sha256="d" * 64,
+            provider="openai",
+            requested_model="fixture-model",
+            started_at=research_started,
+        )
+        research_claim = repository.claim_research(research_request)
+        replayed_research_claim = repository.claim_research(
+            research_request.model_copy(update={"research_id": uuid4()})
+        )
+        with pytest.raises(TailRadarPersistenceError, match="prompt version"):
+            repository.claim_research(
+                research_request.model_copy(
+                    update={"research_id": uuid4(), "prompt_sha256": "e" * 64}
+                )
+            )
+        other_provider_claim = repository.claim_research(
+            research_request.model_copy(
+                update={
+                    "research_id": other_provider_research_id,
+                    "provider": "replacement-provider",
+                }
+            )
+        )
+        forced_research_claim = repository.claim_research(
+            research_request.model_copy(update={"research_id": forced_research_id, "force": True})
+        )
+
+        assert research_claim.created is True
+        assert replayed_research_claim.created is False
+        assert replayed_research_claim.research.research_id == research_id
+        assert other_provider_claim.created is True
+        assert other_provider_claim.research.provider == "replacement-provider"
+        assert forced_research_claim.created is True
+        assert forced_research_claim.research.base_research_id == research_id
+
+        persisted_claim = TailRadarResearchClaim(
+            claim_id="fact_one",
+            statement="A verified fixture fact.",
+            classification=ResearchClaimClassification.VERIFIED_FACT,
+            source_ids=(research_source_id,),
+        )
+        source_reference = TailRadarResearchSourceReference(
+            source_id=research_source_id,
+            url="https://example.test/announcement",
+            publication_timestamp_status=PublicationTimestampStatus.VERIFIED,
+            availability_at_as_of=SourceAvailabilityAtAsOf.AVAILABLE,
+            relationship_claim_ids=(persisted_claim.claim_id,),
+        )
+        token_usage = ResearchTokenUsage(
+            input_tokens=10,
+            output_tokens=5,
+            total_tokens=15,
+        )
+        research_payload = TailRadarResearchPayload(
+            symbol=record.symbol,
+            candidate_id=candidate_id,
+            source_run_id=tail_run_id,
+            source_snapshot_id=snapshot_id,
+            source_candidate_as_of=fetch_finished,
+            analysis_as_of=analysis_as_of,
+            concise_summary="Fixture research summary.",
+            verified_facts=(persisted_claim,),
+            likely_drivers=(),
+            company_context=(),
+            sector_context=(),
+            market_context=(),
+            positive_factors=(),
+            risk_factors=(),
+            unresolved_questions=(),
+            evidence_quality=ResearchEvidenceQuality.HIGH,
+            confidence=0.9,
+            provider="openai",
+            requested_model="fixture-model",
+            model_identifier="fixture-model-2026-08-28",
+            provider_response_id="resp_fixture",
+            prompt_sha256="d" * 64,
+            source_references=(source_reference,),
+            token_usage=token_usage,
+        )
+        saved_research = repository.complete_research(
+            TailRadarResearchCompletion(
+                research_id=research_id,
+                artifact_id=research_artifact_id,
+                status=TailRadarResearchStatus.SUCCEEDED,
+                payload=research_payload,
+                sources=(
+                    TailRadarResearchSourceCreate(
+                        source_id=research_source_id,
+                        research_id=research_id,
+                        url=source_reference.url,
+                        title="Fixture announcement",
+                        publisher_domain="example.test",
+                        published_at=intended,
+                        publication_timestamp_status=(PublicationTimestampStatus.VERIFIED),
+                        availability_at_as_of=SourceAvailabilityAtAsOf.AVAILABLE,
+                        retrieved_at=research_finished,
+                        relationship_claim_ids=(persisted_claim.claim_id,),
+                    ),
+                ),
+                actual_model="fixture-model-2026-08-28",
+                provider_response_id="resp_fixture",
+                token_usage=token_usage,
+                finished_at=research_finished,
+            )
+        )
+        latest_research = repository.get_latest_research(candidate_id)
+
+        assert saved_research.status is TailRadarResearchStatus.SUCCEEDED
+        assert saved_research.artifact_id == research_artifact_id
+        assert saved_research.sources[0].source_id == research_source_id
+        assert latest_research is not None
+        assert latest_research.research_id == research_id
+        assert latest_research.payload == research_payload
+
         second_source_claim = snapshot_repository.claim_run(
             key=SnapshotRunKey(
                 job_type=FULL_MARKET_SNAPSHOT_JOB_TYPE,
@@ -297,8 +545,40 @@ def test_postgres_tail_radar_is_idempotent_and_persists_versioned_candidate_evid
             assert artifact is not None
             assert artifact.artifact_type == TAIL_RADAR_CANDIDATE_ARTIFACT_TYPE
             assert artifact.schema_version == 1
+            analysis_artifact = session.get(ResearchArtifact, analysis_id)
+            assert analysis_artifact is not None
+            assert analysis_artifact.artifact_type == "tail_radar.intraday_features"
+            research_artifact = session.get(ResearchArtifact, research_artifact_id)
+            assert research_artifact is not None
+            assert research_artifact.artifact_type == "tail_radar.web_research"
+            source_row = session.get(TailRadarResearchSourceRecord, research_source_id)
+            assert source_row is not None
+            assert source_row.publisher_domain == "example.test"
     finally:
         with factory.begin() as session:
+            session.execute(
+                delete(TailRadarResearchSourceRecord).where(
+                    TailRadarResearchSourceRecord.research_id.in_((research_id, forced_research_id))
+                )
+            )
+            session.execute(
+                delete(TailRadarResearchRecord).where(
+                    TailRadarResearchRecord.research_id.in_(
+                        (research_id, forced_research_id, other_provider_research_id)
+                    )
+                )
+            )
+            session.execute(
+                delete(ResearchArtifact).where(ResearchArtifact.artifact_id == research_artifact_id)
+            )
+            session.execute(
+                delete(TailRadarIntradayAnalysisRecord).where(
+                    TailRadarIntradayAnalysisRecord.analysis_id == analysis_id
+                )
+            )
+            session.execute(
+                delete(ResearchArtifact).where(ResearchArtifact.artifact_id == analysis_id)
+            )
             session.execute(
                 delete(TailRadarCandidateRecord).where(
                     TailRadarCandidateRecord.candidate_id == candidate_id

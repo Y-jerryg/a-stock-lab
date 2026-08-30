@@ -8,10 +8,12 @@ from a_stock_lab.shared.market_data.errors import (
     ProviderInvalidResponseError,
 )
 from a_stock_lab.shared.market_data.models import (
+    IntradayBarRequest,
     MarketDataCapability,
     MarketSnapshotRecord,
     NormalizationIssue,
     NormalizationIssueCode,
+    ProviderIntradayBarBatch,
     ProviderSnapshotBatch,
     SnapshotQualityThresholds,
 )
@@ -97,6 +99,9 @@ class FakeProvider:
 
     def fetch_full_market_snapshot(self) -> ProviderSnapshotBatch:
         return self._batch
+
+    def fetch_intraday_bars(self, request: IntradayBarRequest) -> ProviderIntradayBarBatch:
+        raise AssertionError(f"unexpected intraday request: {request}")
 
 
 def test_catastrophic_partial_response_never_becomes_official_snapshot() -> None:

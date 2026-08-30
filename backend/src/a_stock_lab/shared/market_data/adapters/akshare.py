@@ -10,7 +10,7 @@ from requests.exceptions import JSONDecodeError as RequestsJSONDecodeError
 from requests.exceptions import RequestException, Timeout
 
 from a_stock_lab.core.logging import get_logger
-from a_stock_lab.core.time import as_market_timezone, now_in_market_timezone
+from a_stock_lab.core.time import MARKET_TIME_ZONE, as_market_timezone, now_in_market_timezone
 from a_stock_lab.shared.market_data.errors import (
     ProviderError,
     ProviderInvalidResponseError,
@@ -18,10 +18,13 @@ from a_stock_lab.shared.market_data.errors import (
     ProviderUnavailableError,
 )
 from a_stock_lab.shared.market_data.models import (
+    IntradayBar,
+    IntradayBarRequest,
     MarketDataCapability,
     MarketSnapshotRecord,
     NormalizationIssue,
     NormalizationIssueCode,
+    ProviderIntradayBarBatch,
     ProviderRetryPolicy,
     ProviderSnapshotBatch,
 )
@@ -56,6 +59,15 @@ _COLUMNS = {
     "float_market_cap": "流通市值",
 }
 _NUMERIC_FIELDS = tuple(field for field in _COLUMNS if field not in {"symbol", "name"})
+_INTRADAY_COLUMNS = {
+    "ended_at": "时间",
+    "open": "开盘",
+    "close": "收盘",
+    "high": "最高",
+    "low": "最低",
+    "volume": "成交量",
+    "amount": "成交额",
+}
 
 
 class _FrameLike(Protocol):
@@ -68,6 +80,18 @@ def _fetch_live_frame() -> object:
     import akshare  # type: ignore[import-untyped]
 
     return akshare.stock_zh_a_spot_em()
+
+
+def _fetch_live_intraday_frame(request: IntradayBarRequest) -> object:
+    import akshare
+
+    return akshare.stock_zh_a_hist_min_em(
+        symbol=request.symbol,
+        start_date=request.start_at.strftime("%Y-%m-%d %H:%M:%S"),
+        end_date=request.end_at.strftime("%Y-%m-%d %H:%M:%S"),
+        period=str(int(request.interval_minutes)),
+        adjust="",
+    )
 
 
 def _optional_text(value: object) -> str | None:
@@ -101,11 +125,13 @@ class AkShareMarketDataProvider:
         *,
         retry_policy: ProviderRetryPolicy | None = None,
         fetcher: Callable[[], object] = _fetch_live_frame,
+        intraday_fetcher: Callable[[IntradayBarRequest], object] = _fetch_live_intraday_frame,
         sleeper: Callable[[float], None] = time.sleep,
         clock: Callable[[], datetime] = now_in_market_timezone,
     ) -> None:
         self._retry_policy = retry_policy or ProviderRetryPolicy()
         self._fetcher = fetcher
+        self._intraday_fetcher = intraday_fetcher
         self._sleeper = sleeper
         self._clock = clock
 
@@ -115,10 +141,18 @@ class AkShareMarketDataProvider:
 
     @property
     def capabilities(self) -> frozenset[MarketDataCapability]:
-        return frozenset({MarketDataCapability.FULL_MARKET_SNAPSHOT})
+        return frozenset(
+            {
+                MarketDataCapability.FULL_MARKET_SNAPSHOT,
+                MarketDataCapability.INTRADAY_BARS,
+            }
+        )
 
     def fetch_full_market_snapshot(self) -> ProviderSnapshotBatch:
-        frame, attempt_count = self._fetch_with_retry()
+        frame, attempt_count = self._fetch_with_retry(
+            fetcher=self._fetcher,
+            operation="full_market_snapshot",
+        )
         rows = self._extract_rows(frame)
         fetched_at = as_market_timezone(self._clock())
         records: list[MarketSnapshotRecord] = []
@@ -151,11 +185,57 @@ class AkShareMarketDataProvider:
             },
         )
 
-    def _fetch_with_retry(self) -> tuple[object, int]:
+    def fetch_intraday_bars(self, request: IntradayBarRequest) -> ProviderIntradayBarBatch:
+        frame, attempt_count = self._fetch_with_retry(
+            fetcher=lambda: self._intraday_fetcher(request),
+            operation="intraday_bars",
+        )
+        rows = self._extract_intraday_rows(frame)
+        fetched_at = as_market_timezone(self._clock())
+        bars: list[IntradayBar] = []
+        issue_count = 0
+        for row in rows:
+            bar = self._normalize_intraday_row(
+                row=row,
+                request=request,
+                fetched_at=fetched_at,
+            )
+            if bar is None:
+                issue_count += 1
+            else:
+                bars.append(bar)
+
+        return ProviderIntradayBarBatch(
+            provider=self.provider_id,
+            request=request,
+            bars=tuple(bars),
+            raw_record_count=len(rows),
+            normalization_issue_count=issue_count,
+            provider_version=installed_akshare_version(),
+            provider_metadata={
+                "adapter": "AkShareMarketDataProvider",
+                "akshare_version": installed_akshare_version(),
+                "upstream": "Eastmoney",
+                "upstream_function": "stock_zh_a_hist_min_em",
+                "attempt_count": attempt_count,
+                "adjustment": "none",
+                "bar_timestamp_semantics": "bar_end",
+                "volume_source_unit": "lot",
+                "volume_normalized_unit": "share",
+            },
+            fetched_at=fetched_at,
+        )
+
+    def _fetch_with_retry(
+        self,
+        *,
+        fetcher: Callable[[], object],
+        operation: str,
+    ) -> tuple[object, int]:
         last_error: ProviderError | None = None
         for attempt in range(1, self._retry_policy.max_attempts + 1):
             try:
-                return self._fetcher(), attempt
+                return fetcher(), attempt
             except (Timeout, TimeoutError) as exc:
                 last_error = ProviderTimeoutError(
                     provider=self.provider_id,
@@ -185,6 +265,7 @@ class AkShareMarketDataProvider:
                     "market_data_provider_retry",
                     extra={
                         "provider": self.provider_id,
+                        "operation": operation,
                         "attempt": attempt,
                         "next_attempt": attempt + 1,
                         "delay_seconds": delay,
@@ -196,6 +277,72 @@ class AkShareMarketDataProvider:
         if last_error is None:  # pragma: no cover - loop executes at least once by validation
             raise AssertionError("retry policy allowed no attempts")
         raise last_error from cause
+
+    def _extract_intraday_rows(self, raw_frame: object) -> list[dict[object, object]]:
+        if not hasattr(raw_frame, "columns") or not callable(getattr(raw_frame, "to_dict", None)):
+            raise ProviderInvalidResponseError(
+                provider=self.provider_id,
+                message="intraday provider did not return a tabular response",
+            )
+        frame = cast(_FrameLike, raw_frame)
+        columns = {str(column) for column in frame.columns}
+        missing_columns = set(_INTRADAY_COLUMNS.values()) - columns
+        if missing_columns:
+            raise ProviderInvalidResponseError(
+                provider=self.provider_id,
+                message="intraday provider response is missing required columns",
+            )
+        try:
+            rows = frame.to_dict(orient="records")
+        except Exception as exc:
+            raise ProviderInvalidResponseError(
+                provider=self.provider_id,
+                message="intraday provider table could not be read",
+            ) from exc
+        if not isinstance(rows, list) or not all(isinstance(row, Mapping) for row in rows):
+            raise ProviderInvalidResponseError(
+                provider=self.provider_id,
+                message="intraday provider returned malformed table rows",
+            )
+        return rows
+
+    def _normalize_intraday_row(
+        self,
+        *,
+        row: Mapping[object, object],
+        request: IntradayBarRequest,
+        fetched_at: datetime,
+    ) -> IntradayBar | None:
+        ended_at_text = _optional_text(row.get(_INTRADAY_COLUMNS["ended_at"]))
+        if ended_at_text is None:
+            return None
+        try:
+            parsed = datetime.fromisoformat(ended_at_text)
+        except ValueError:
+            return None
+        ended_at = as_market_timezone(
+            parsed.replace(tzinfo=MARKET_TIME_ZONE) if parsed.tzinfo is None else parsed
+        )
+
+        numeric_values: dict[str, float] = {}
+        for field in ("open", "high", "low", "close", "volume", "amount"):
+            value, invalid = _optional_number(row.get(_INTRADAY_COLUMNS[field]))
+            if invalid or value is None:
+                return None
+            numeric_values[field] = value
+        numeric_values["volume"] *= _SHARES_PER_LOT
+        try:
+            return IntradayBar(
+                symbol=request.symbol,
+                interval_minutes=request.interval_minutes,
+                ended_at=ended_at,
+                provider=self.provider_id,
+                provider_timestamp=None,
+                fetched_at=fetched_at,
+                **numeric_values,
+            )
+        except ValidationError:
+            return None
 
     def _extract_rows(self, raw_frame: object) -> list[dict[object, object]]:
         if not hasattr(raw_frame, "columns") or not callable(getattr(raw_frame, "to_dict", None)):

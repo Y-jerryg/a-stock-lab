@@ -19,6 +19,16 @@ The durable relational contracts are:
 - `tail_radar_candidates` links a candidate `ResearchArtifact` to its Tail Radar run, source market
   snapshot, and symbol. The artifact payload carries the complete normalized row and screening
   evidence.
+- `tail_radar_intraday_analyses` links a versioned intraday feature artifact to its candidate, Tail
+  Radar run, and source snapshot and enforces candidate/`analysis_as_of`/calculation-version
+  idempotency.
+- `tail_radar_research_analyses` records each OpenAI research attempt, its
+  candidate/run/snapshot identity,
+  aware `analysis_as_of`, prompt hash/version, requested and actual model, token counts, lifecycle,
+  forced-attempt lineage, and immutable research artifact reference.
+- `tail_radar_research_sources` stores source URLs separately with title/domain, verified or
+  uncertain publication timing, retrieval timing, historical availability classification, and
+  claim relationships. Unknown metadata remains null rather than being fabricated.
 
 Artifact type names are namespaced (for example `tail_radar.candidate`) and payload consumers
 must select a supported `schema_version`. The schema remains flexible without sacrificing indexed,
@@ -28,6 +38,19 @@ Phase 3 publishes deterministic selections as `tail_radar.candidate` schema vers
 The candidate `as_of` is the actual source fetch-finish timestamp, while the payload separately
 retains intended time, all actual timestamps, snapshot identity/checksum, rule version, normalized
 row, and exact inclusive decision evidence.
+
+Phase 4 publishes `tail_radar.intraday_features` schema version 1 artifacts. These retain the source
+candidate/run/snapshot, explicit `analysis_as_of`, latest bar used, provider request/provenance,
+calculation version and configuration, nullable feature groups, descriptive path conditions, and an
+intraday quality report. Raw intraday history is not added to PostgreSQL.
+
+Phase 5 publishes `tail_radar.web_research` schema version 1 artifacts. The payload distinguishes
+verified facts, interpretations, and insufficient evidence, and retains candidate/run/snapshot
+provenance, source IDs, prompt hash/version, requested and actual model identifiers, token usage,
+confidence, evidence quality, and explicit `analysis_as_of`. A partial unique index admits one
+non-forced attempt for
+`(candidate, run, analysis_as_of, prompt_version, provider, requested_model)`. Forced attempts are
+separate rows linked to the cached base attempt; no result is overwritten.
 
 ## Parquet: large immutable datasets
 
