@@ -158,9 +158,7 @@ class TailRadarResearchSourceCreate(BaseModel):
             raise ValueError("unavailable publication metadata cannot include published_at")
         if self.published_at is not None and self.published_at > self.retrieved_at:
             raise ValueError("source publication timestamp cannot follow retrieval")
-        if (
-            self.publication_timestamp_status is PublicationTimestampStatus.VERIFIED
-        ) != (
+        if (self.publication_timestamp_status is PublicationTimestampStatus.VERIFIED) != (
             self.availability_at_as_of
             in {SourceAvailabilityAtAsOf.AVAILABLE, SourceAvailabilityAtAsOf.PUBLISHED_AFTER}
         ):
