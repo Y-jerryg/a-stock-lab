@@ -56,3 +56,10 @@ Feature values are reproducible and safe from bar-level look-ahead. Incomplete e
 visible instead of being filled or silently accepted. Future calculation or threshold changes need
 a new calculation version and tests. No overall score, buy/sell label, target price, prediction,
 scheduler, or anonymous execution endpoint is introduced.
+
+## Phase 7 presentation evolution
+
+ADR 0011 advances the artifact schema and cache identity to `tail-radar-intraday-v2`. Calculation
+formulas and thresholds remain those defined above. The only semantic addition is persistence of the
+ordered normalized bars that survived the existing future-bar cutoff and were actually used. This
+supports an auditable chart without a live refetch or fabricated series.

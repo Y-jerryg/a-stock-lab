@@ -22,6 +22,18 @@ class TailRadarCandidateNotFoundError(TailRadarError):
     """The requested persisted Tail Radar candidate does not exist."""
 
 
+class TailRadarWorkflowError(TailRadarError):
+    """The complete Tail Radar application workflow could not proceed safely."""
+
+
+class TailRadarWorkflowNotFoundError(TailRadarWorkflowError):
+    """The requested resumable Tail Radar workflow does not exist."""
+
+
+class TailRadarWorkflowTimeError(TailRadarWorkflowError):
+    """A workflow point-in-time boundary is invalid."""
+
+
 class TailRadarIntradayAnalysisError(TailRadarError):
     """The candidate intraday analysis could not be produced safely."""
 

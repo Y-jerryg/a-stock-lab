@@ -16,6 +16,8 @@ from a_stock_lab.core.time import as_market_timezone
 from a_stock_lab.features.tail_radar.domain.intraday import (
     INTRADAY_CALCULATION_VERSION,
     INTRADAY_FEATURE_SCHEMA_VERSION,
+    LEGACY_INTRADAY_CALCULATION_VERSION,
+    LEGACY_INTRADAY_FEATURE_SCHEMA_VERSION,
     IntradayDataQualityReport,
     IntradayFeatureComputation,
     IntradayFeatureConfiguration,
@@ -47,6 +49,8 @@ class TailRadarIntradayAnalysisPayload(BaseModel):
     provider_metadata: dict[str, JsonValue]
     provider_fetched_at: AwareDatetime
     intraday_request: IntradayBarRequest
+    # Schema 1 did not persist its normalized input series. None preserves that distinction.
+    used_bars: tuple[IntradayBar, ...] | None = None
     latest_bar_used: IntradayBar | None
     feature_schema_version: int = INTRADAY_FEATURE_SCHEMA_VERSION
     calculation_version: str = INTRADAY_CALCULATION_VERSION
@@ -63,16 +67,36 @@ class TailRadarIntradayAnalysisPayload(BaseModel):
 
     @model_validator(mode="after")
     def validate_provenance(self) -> "TailRadarIntradayAnalysisPayload":
-        if self.feature_schema_version != INTRADAY_FEATURE_SCHEMA_VERSION:
+        supported_versions = {
+            LEGACY_INTRADAY_FEATURE_SCHEMA_VERSION: LEGACY_INTRADAY_CALCULATION_VERSION,
+            INTRADAY_FEATURE_SCHEMA_VERSION: INTRADAY_CALCULATION_VERSION,
+        }
+        if self.feature_schema_version not in supported_versions:
             raise ValueError("unsupported Tail Radar intraday feature schema")
-        if self.calculation_version != INTRADAY_CALCULATION_VERSION:
+        if self.calculation_version != supported_versions[self.feature_schema_version]:
             raise ValueError("unsupported Tail Radar intraday calculation version")
+        if self.feature_schema_version == LEGACY_INTRADAY_FEATURE_SCHEMA_VERSION:
+            if self.used_bars is not None:
+                raise ValueError("legacy intraday artifacts cannot claim a persisted bar series")
+        elif self.used_bars is None:
+            raise ValueError("current intraday artifacts require their persisted bar series")
         if self.source_candidate_as_of > self.analysis_as_of:
             raise ValueError("intraday analysis cannot precede candidate evidence")
         if self.intraday_request.symbol != self.symbol:
             raise ValueError("intraday request symbol must match the analysis symbol")
         if self.intraday_request.end_at != self.analysis_as_of:
             raise ValueError("intraday request must end at analysis_as_of")
+        persisted_bars = self.used_bars or ()
+        if any(bar.symbol != self.symbol for bar in persisted_bars):
+            raise ValueError("intraday series symbols must match the analysis")
+        if any(bar.provider != self.provider for bar in persisted_bars):
+            raise ValueError("intraday series providers must match the analysis")
+        if any(bar.ended_at > self.analysis_as_of for bar in persisted_bars):
+            raise ValueError("intraday series cannot contain future bars")
+        if tuple(sorted(persisted_bars, key=lambda bar: bar.ended_at)) != persisted_bars:
+            raise ValueError("intraday series must be ordered")
+        if len({bar.ended_at for bar in persisted_bars}) != len(persisted_bars):
+            raise ValueError("intraday series must have unique timestamps")
         if self.latest_bar_used is not None:
             if self.latest_bar_used.symbol != self.symbol:
                 raise ValueError("latest intraday bar symbol must match the analysis")
@@ -86,6 +110,11 @@ class TailRadarIntradayAnalysisPayload(BaseModel):
                 raise ValueError("latest intraday bar interval must match the request")
         if (self.latest_bar_used is None) != (self.data_quality.used_bar_count == 0):
             raise ValueError("latest intraday bar must agree with the used-bar count")
+        if self.used_bars is not None:
+            if self.data_quality.used_bar_count != len(self.used_bars):
+                raise ValueError("intraday series must agree with the used-bar count")
+            if self.latest_bar_used != (None if not self.used_bars else self.used_bars[-1]):
+                raise ValueError("latest intraday bar must agree with the series")
         return self
 
     @classmethod
@@ -117,6 +146,7 @@ class TailRadarIntradayAnalysisPayload(BaseModel):
             provider_metadata=provider_metadata,
             provider_fetched_at=provider_fetched_at,
             intraday_request=intraday_request,
+            used_bars=computation.used_bars,
             latest_bar_used=computation.latest_bar_used,
             configuration=configuration,
             data_quality=computation.data_quality,

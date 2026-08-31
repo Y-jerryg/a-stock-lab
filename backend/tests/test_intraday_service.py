@@ -10,6 +10,7 @@ from a_stock_lab.features.tail_radar.application.intraday_models import (
     IntradayAnalysisDisposition,
     TailRadarIntradayAnalysisCreate,
     TailRadarIntradayAnalysisData,
+    TailRadarIntradayAnalysisPayload,
 )
 from a_stock_lab.features.tail_radar.application.intraday_service import (
     TailRadarIntradayAnalysisService,
@@ -19,7 +20,11 @@ from a_stock_lab.features.tail_radar.application.models import (
     TailRadarCandidatePayload,
 )
 from a_stock_lab.features.tail_radar.domain.errors import TailRadarIntradayAnalysisTimeError
-from a_stock_lab.features.tail_radar.domain.intraday import IntradayFeatureEngine
+from a_stock_lab.features.tail_radar.domain.intraday import (
+    LEGACY_INTRADAY_CALCULATION_VERSION,
+    LEGACY_INTRADAY_FEATURE_SCHEMA_VERSION,
+    IntradayFeatureEngine,
+)
 from a_stock_lab.features.tail_radar.domain.screening import (
     TAIL_RADAR_SCREENING_RULE_VERSION,
     TailRadarDecisionOutcome,
@@ -206,6 +211,23 @@ def test_service_persists_point_in_time_features_and_replays_idempotently() -> N
     assert first.analysis.payload.data_quality.future_bar_count == 1
     assert first.analysis.run_id == RUN_ID
     assert first.analysis.snapshot_id == SNAPSHOT_ID
+
+
+def test_schema_one_artifact_remains_readable_without_inventing_a_bar_series() -> None:
+    result = service(FakeRepository(), FakeProvider()).execute(
+        candidate_id=CANDIDATE_ID,
+        analysis_as_of=ANALYSIS_AS_OF,
+    )
+    legacy_payload = result.analysis.payload.model_dump(mode="python")
+    legacy_payload.pop("used_bars")
+    legacy_payload["feature_schema_version"] = LEGACY_INTRADAY_FEATURE_SCHEMA_VERSION
+    legacy_payload["calculation_version"] = LEGACY_INTRADAY_CALCULATION_VERSION
+
+    parsed = TailRadarIntradayAnalysisPayload.model_validate(legacy_payload)
+
+    assert parsed.used_bars is None
+    assert parsed.latest_bar_used is not None
+    assert parsed.data_quality.used_bar_count == 1
 
 
 @pytest.mark.parametrize(

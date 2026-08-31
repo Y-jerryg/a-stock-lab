@@ -157,7 +157,9 @@ export function AppShell() {
               <span className="size-1.5 rounded-full bg-emerald-500" />
               Foundation environment
             </div>
-            <p className="mt-1 pl-3.5 text-[11px] text-[var(--text-subtle)]">Phase 0 · v0.1.0</p>
+            <p className="mt-1 pl-3.5 text-[11px] text-[var(--text-subtle)]">
+              Tail Radar · point-in-time
+            </p>
           </div>
         </div>
       </aside>

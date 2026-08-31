@@ -30,6 +30,10 @@ flowchart LR
   OpenAIAdapter -->|"web search"| Web[(Public web sources)]
   AIResearch -->|"research artifact + source records"| Shared
   AIResearch -->|"candidate + deterministic evidence"| TailRadar
+  Workflow["TailRadarApplicationService"] -->|"resume-safe orchestration"| Engine
+  Workflow --> TailRadar
+  Workflow --> Intraday
+  Workflow --> AIResearch
   Internal["Future authenticated operations"] -.->|"separate internal boundary"| API
 ```
 
@@ -67,6 +71,10 @@ persisted candidate and eligible deterministic evidence, then delegates a provid
 to the OpenAI adapter. Only that adapter imports the SDK. It uses the Responses API, web search, and
 strict structured output; the deterministic screening and feature paths never import or invoke AI.
 The paid operation is CLI-only and claims its cache identity before making the external request.
+Phase 6 composes these services in `TailRadarApplicationService`. Its workflow lifecycle and
+per-candidate stage rows expose partial success and resumability without duplicating domain rules or
+provider adapters. Phase 7 consumes only public read APIs and presents raw market evidence,
+deterministic calculations, and AI interpretation as distinct visual layers.
 
 ## Frontend boundaries
 

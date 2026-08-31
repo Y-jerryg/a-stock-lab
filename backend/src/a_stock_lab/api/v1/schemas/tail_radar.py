@@ -11,10 +11,18 @@ from a_stock_lab.features.tail_radar.application.models import (
     TailRadarCandidateData,
     TailRadarRunData,
 )
+from a_stock_lab.features.tail_radar.application.orchestration_models import (
+    TailRadarWorkflowCandidateState,
+    TailRadarWorkflowData,
+)
+from a_stock_lab.features.tail_radar.application.query_models import (
+    TailRadarCandidateOverviewData,
+)
 from a_stock_lab.features.tail_radar.application.research_models import TailRadarResearchData
 from a_stock_lab.features.tail_radar.domain.research import TailRadarResearchClaim
 from a_stock_lab.shared.execution.models import RunStatus
-from a_stock_lab.shared.market_data.models import AShareExchange
+from a_stock_lab.shared.market_data.models import AShareExchange, SnapshotQualityReport
+from a_stock_lab.shared.market_data.persistence_schemas import PersistedSnapshotManifest
 
 
 class TailRadarRuleConfigurationResponse(BaseModel):
@@ -71,8 +79,19 @@ class TailRadarCandidateSummaryResponse(BaseModel):
     name: str | None
     price: float
     pct_change: float
+    amount: float | None
+    turnover_rate: float | None
     as_of: AwareDatetime
     screening_rule_version: str
+    intraday_position: float | None = None
+    distance_from_high_pct: float | None = None
+    previous_5m_return_pct: float | None = None
+    previous_15m_return_pct: float | None = None
+    previous_30m_return_pct: float | None = None
+    technical_status: Literal["pending", "running", "succeeded", "failed"] | None = None
+    research_status: Literal["pending", "running", "succeeded", "no_evidence", "failed"] | None = (
+        None
+    )
 
     @classmethod
     def from_data(cls, data: TailRadarCandidateData) -> "TailRadarCandidateSummaryResponse":
@@ -88,8 +107,35 @@ class TailRadarCandidateSummaryResponse(BaseModel):
             name=record.name,
             price=record.price,
             pct_change=record.pct_change,
+            amount=record.amount,
+            turnover_rate=record.turnover_rate,
             as_of=data.as_of,
             screening_rule_version=data.payload.screening_rule_version,
+        )
+
+    @classmethod
+    def from_overview(
+        cls, data: TailRadarCandidateOverviewData
+    ) -> "TailRadarCandidateSummaryResponse":
+        response = cls.from_data(data.candidate)
+        price = None if data.intraday_analysis is None else data.intraday_analysis.payload.price
+        state = data.workflow_state
+        return response.model_copy(
+            update={
+                "intraday_position": None if price is None else price.normalized_intraday_position,
+                "distance_from_high_pct": (
+                    None if price is None else price.distance_from_intraday_high_pct
+                ),
+                "previous_5m_return_pct": (None if price is None else price.previous_5m_return_pct),
+                "previous_15m_return_pct": (
+                    None if price is None else price.previous_15m_return_pct
+                ),
+                "previous_30m_return_pct": (
+                    None if price is None else price.previous_30m_return_pct
+                ),
+                "technical_status": (None if state is None else state.technical_status.value),
+                "research_status": None if state is None else state.research_status.value,
+            }
         )
 
 
@@ -98,6 +144,78 @@ class TailRadarCandidateListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class TailRadarWorkflowResponse(BaseModel):
+    workflow_run_id: UUID
+    workflow_version: str
+    lifecycle: Literal[
+        "claimed",
+        "snapshot_running",
+        "screening_running",
+        "candidate_analysis_running",
+        "succeeded",
+        "partial_success",
+        "failed",
+    ]
+    execution_status: RunStatus
+    analysis_as_of: AwareDatetime | None
+    candidate_count: int | None
+    technical_succeeded_count: int
+    technical_failed_count: int
+    technical_pending_count: int
+    research_succeeded_count: int
+    research_no_evidence_count: int
+    research_failed_count: int
+    research_pending_count: int
+    error_stage: str | None
+    error_code: str | None
+    actual_started_at: AwareDatetime
+    actual_finished_at: AwareDatetime | None
+
+    @classmethod
+    def from_data(cls, data: TailRadarWorkflowData) -> "TailRadarWorkflowResponse":
+        return cls.model_validate(data.model_dump(mode="python"))
+
+
+class TailRadarSnapshotMetricsResponse(BaseModel):
+    snapshot_run_id: UUID
+    snapshot_id: UUID
+    provider: str
+    provider_version: str | None
+    intended_snapshot_time: AwareDatetime
+    actual_fetch_started_at: AwareDatetime
+    actual_fetch_finished_at: AwareDatetime
+    provider_timestamp: AwareDatetime | None
+    persisted_at: AwareDatetime
+    latency_ms: float
+    row_count: int
+    schema_version: int
+    quality_report: SnapshotQualityReport
+
+    @classmethod
+    def from_data(cls, data: PersistedSnapshotManifest) -> "TailRadarSnapshotMetricsResponse":
+        return cls(
+            snapshot_run_id=data.run_id,
+            snapshot_id=data.snapshot_id,
+            provider=data.provider,
+            provider_version=data.provider_version,
+            intended_snapshot_time=data.intended_snapshot_time,
+            actual_fetch_started_at=data.actual_fetch_started_at,
+            actual_fetch_finished_at=data.actual_fetch_finished_at,
+            provider_timestamp=data.provider_timestamp,
+            persisted_at=data.persisted_at,
+            latency_ms=data.latency_ms,
+            row_count=data.row_count,
+            schema_version=data.schema_version,
+            quality_report=data.quality_report,
+        )
+
+
+class TailRadarRunSummaryResponse(BaseModel):
+    run: TailRadarRunResponse
+    workflow: TailRadarWorkflowResponse | None
+    snapshot: TailRadarSnapshotMetricsResponse
 
 
 class SnapshotRecordResponse(BaseModel):
@@ -224,6 +342,7 @@ class TailRadarIntradayAnalysisResponse(BaseModel):
     symbol: str
     source_candidate_as_of: AwareDatetime
     analysis_as_of: AwareDatetime
+    used_bars: tuple[IntradayBarResponse, ...] | None
     latest_bar_used: IntradayBarResponse | None
     feature_schema_version: int
     calculation_version: str
@@ -246,6 +365,14 @@ class TailRadarIntradayAnalysisResponse(BaseModel):
             symbol=data.symbol,
             source_candidate_as_of=payload.source_candidate_as_of,
             analysis_as_of=data.analysis_as_of,
+            used_bars=(
+                None
+                if payload.used_bars is None
+                else tuple(
+                    IntradayBarResponse.model_validate(bar.model_dump(mode="python"))
+                    for bar in payload.used_bars
+                )
+            ),
             latest_bar_used=(
                 None
                 if payload.latest_bar_used is None
@@ -369,6 +496,20 @@ class TailRadarWebResearchResponse(BaseModel):
         )
 
 
+class TailRadarCandidateWorkflowStateResponse(BaseModel):
+    workflow_run_id: UUID
+    technical_status: Literal["pending", "running", "succeeded", "failed"]
+    research_status: Literal["pending", "running", "succeeded", "no_evidence", "failed"]
+    technical_error_code: str | None
+    research_error_code: str | None
+
+    @classmethod
+    def from_data(
+        cls, data: TailRadarWorkflowCandidateState
+    ) -> "TailRadarCandidateWorkflowStateResponse":
+        return cls.model_validate(data.model_dump(mode="python"))
+
+
 class TailRadarCandidateDetailResponse(BaseModel):
     candidate_id: UUID
     run_id: UUID
@@ -383,6 +524,7 @@ class TailRadarCandidateDetailResponse(BaseModel):
     decision: ScreeningDecisionResponse
     intraday_analysis: TailRadarIntradayAnalysisResponse | None
     web_research: TailRadarWebResearchResponse | None
+    workflow_state: TailRadarCandidateWorkflowStateResponse | None
     created_at: AwareDatetime
 
     @classmethod
@@ -391,6 +533,7 @@ class TailRadarCandidateDetailResponse(BaseModel):
         data: TailRadarCandidateData,
         intraday_analysis: TailRadarIntradayAnalysisData | None = None,
         web_research: TailRadarResearchData | None = None,
+        workflow_state: TailRadarWorkflowCandidateState | None = None,
     ) -> "TailRadarCandidateDetailResponse":
         payload = data.payload
         decision = payload.decision
@@ -430,6 +573,11 @@ class TailRadarCandidateDetailResponse(BaseModel):
                 None
                 if web_research is None
                 else TailRadarWebResearchResponse.from_data(web_research)
+            ),
+            workflow_state=(
+                None
+                if workflow_state is None
+                else TailRadarCandidateWorkflowStateResponse.from_data(workflow_state)
             ),
             created_at=data.created_at,
         )

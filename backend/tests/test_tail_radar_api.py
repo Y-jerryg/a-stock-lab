@@ -18,7 +18,16 @@ from a_stock_lab.features.tail_radar.application.models import (
     TailRadarRunData,
     TailRadarRunPage,
 )
+from a_stock_lab.features.tail_radar.application.orchestration_models import (
+    TAIL_RADAR_WORKFLOW_VERSION,
+    TailRadarWorkflowData,
+    TailRadarWorkflowLifecycle,
+)
 from a_stock_lab.features.tail_radar.application.queries import TailRadarQueryService
+from a_stock_lab.features.tail_radar.application.query_models import (
+    TailRadarCandidateOverviewData,
+    TailRadarCandidateOverviewPage,
+)
 from a_stock_lab.features.tail_radar.application.research_models import (
     ResearchTokenUsage,
     TailRadarResearchData,
@@ -46,7 +55,11 @@ from a_stock_lab.shared.market_data.models import (
     IntradayBarRequest,
     MarketSnapshotRecord,
     ProviderIntradayBarBatch,
+    SnapshotManifestStatus,
+    SnapshotQualityReport,
+    SnapshotQualityThresholds,
 )
+from a_stock_lab.shared.market_data.persistence_schemas import PersistedSnapshotManifest
 
 INTENDED = datetime(2026, 8, 28, 14, 30, tzinfo=MARKET_TIME_ZONE)
 FETCH_STARTED = INTENDED + timedelta(seconds=1)
@@ -239,6 +252,71 @@ def research_data() -> TailRadarResearchData:
     )
 
 
+def workflow_data() -> TailRadarWorkflowData:
+    return TailRadarWorkflowData(
+        workflow_run_id=UUID("88888888-8888-4888-8888-888888888888"),
+        trade_date=INTENDED.date(),
+        intended_snapshot_time=INTENDED,
+        analysis_as_of=ANALYSIS_AS_OF,
+        workflow_version=TAIL_RADAR_WORKFLOW_VERSION,
+        lifecycle=TailRadarWorkflowLifecycle.SUCCEEDED,
+        execution_status=RunStatus.SUCCEEDED,
+        snapshot_run_id=SNAPSHOT_RUN_ID,
+        snapshot_id=SNAPSHOT_ID,
+        screening_run_id=RUN_ID,
+        candidate_count=1,
+        technical_succeeded_count=1,
+        technical_failed_count=0,
+        technical_pending_count=0,
+        research_succeeded_count=0,
+        research_no_evidence_count=1,
+        research_failed_count=0,
+        research_pending_count=0,
+        error_stage=None,
+        error_code=None,
+        actual_started_at=SCREEN_STARTED,
+        actual_finished_at=ANALYSIS_AS_OF + timedelta(seconds=2),
+        created_at=SCREEN_STARTED,
+        updated_at=ANALYSIS_AS_OF + timedelta(seconds=2),
+    )
+
+
+def snapshot_manifest() -> PersistedSnapshotManifest:
+    return PersistedSnapshotManifest(
+        snapshot_id=SNAPSHOT_ID,
+        run_id=SNAPSHOT_RUN_ID,
+        trade_date=INTENDED.date(),
+        intended_snapshot_time=INTENDED,
+        actual_fetch_started_at=FETCH_STARTED,
+        actual_fetch_finished_at=FETCH_FINISHED,
+        provider="fixture",
+        provider_version="fixture-1",
+        provider_metadata={},
+        storage_key=f"market-data/{INTENDED.date()}/fixture.parquet",
+        checksum_sha256="a" * 64,
+        row_count=5_000,
+        latency_ms=1_000,
+        quality_report=SnapshotQualityReport(
+            passed=True,
+            raw_record_count=5_000,
+            normalized_record_count=5_000,
+            duplicate_symbol_count=0,
+            missing_symbol_count=0,
+            invalid_price_count=0,
+            invalid_pct_change_count=0,
+            malformed_row_count=0,
+            missing_symbol_ratio=0,
+            invalid_price_ratio=0,
+            invalid_pct_change_ratio=0,
+            malformed_row_ratio=0,
+            thresholds=SnapshotQualityThresholds(min_record_count=4_000),
+        ),
+        schema_version=2,
+        status=SnapshotManifestStatus.AVAILABLE,
+        persisted_at=FETCH_FINISHED + timedelta(seconds=1),
+    )
+
+
 class FakeQueryService:
     def latest_run(self) -> TailRadarRunData | None:
         return run_data()
@@ -260,6 +338,24 @@ class FakeQueryService:
             limit=limit,
         )
 
+    def list_candidate_overviews(
+        self, *, run_id: UUID, offset: int, limit: int
+    ) -> TailRadarCandidateOverviewPage:
+        page = self.list_candidates(run_id=run_id, offset=offset, limit=limit)
+        return TailRadarCandidateOverviewPage(
+            items=tuple(
+                TailRadarCandidateOverviewData(
+                    candidate=item,
+                    intraday_analysis=intraday_analysis_data(),
+                    workflow_state=None,
+                )
+                for item in page.items
+            ),
+            total=page.total,
+            offset=page.offset,
+            limit=page.limit,
+        )
+
     def get_candidate(self, candidate_id: UUID) -> TailRadarCandidateData | None:
         return candidate_data() if candidate_id == CANDIDATE_ID else None
 
@@ -270,6 +366,16 @@ class FakeQueryService:
     def get_latest_research(self, candidate_id: UUID) -> TailRadarResearchData:
         assert candidate_id == CANDIDATE_ID
         return research_data()
+
+    def get_candidate_workflow_state(self, candidate_id: UUID) -> None:
+        assert candidate_id == CANDIDATE_ID
+        return None
+
+    def get_workflow_for_run(self, run_id: UUID) -> TailRadarWorkflowData | None:
+        return workflow_data() if run_id == RUN_ID else None
+
+    def get_snapshot(self, snapshot_id: UUID) -> PersistedSnapshotManifest | None:
+        return snapshot_manifest() if snapshot_id == SNAPSHOT_ID else None
 
 
 def override_service(app: FastAPI) -> None:
@@ -286,6 +392,7 @@ def test_public_tail_radar_run_reads_are_paginated_and_read_only(
     latest = client.get("/api/v1/tail-radar/runs/latest")
     history = client.get("/api/v1/tail-radar/runs?page=2&page_size=20")
     detail = client.get(f"/api/v1/tail-radar/runs/{RUN_ID}")
+    summary = client.get(f"/api/v1/tail-radar/runs/{RUN_ID}/summary")
 
     assert latest.status_code == 200
     assert latest.json()["screening_rule_version"] == TAIL_RADAR_SCREENING_RULE_VERSION
@@ -295,6 +402,10 @@ def test_public_tail_radar_run_reads_are_paginated_and_read_only(
     assert history.json()["page_size"] == 20
     assert history.json()["total"] == 21
     assert detail.status_code == 200
+    assert summary.status_code == 200
+    assert summary.json()["workflow"]["lifecycle"] == "succeeded"
+    assert summary.json()["snapshot"]["row_count"] == 5_000
+    assert summary.json()["snapshot"]["quality_report"]["passed"] is True
     assert client.post("/api/v1/tail-radar/runs").status_code == 405
     assert client.get("/api/v1/tail-radar/runs?page_size=101").status_code == 422
 
@@ -331,6 +442,8 @@ def test_public_candidate_reads_preserve_explanatory_snapshot_evidence(
     assert intraday["source_snapshot_id"] == str(SNAPSHOT_ID)
     assert intraday["latest_bar_used"]["ended_at"].endswith("+08:00")
     assert intraday["latest_bar_used"]["ended_at"] <= intraday["analysis_as_of"]
+    assert intraday["used_bars"][-1] == intraday["latest_bar_used"]
+    assert all(bar["ended_at"] <= intraday["analysis_as_of"] for bar in intraday["used_bars"])
     research = payload["web_research"]
     assert research["status"] == "no_evidence"
     assert research["evidence_quality"] == "insufficient"

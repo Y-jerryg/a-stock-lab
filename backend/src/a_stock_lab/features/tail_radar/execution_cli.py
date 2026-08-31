@@ -10,6 +10,7 @@ from a_stock_lab.core.config import get_settings
 from a_stock_lab.core.time import as_market_timezone
 from a_stock_lab.features.tail_radar.domain.errors import TailRadarError
 from a_stock_lab.features.tail_radar.factory import (
+    build_tail_radar_application_service,
     build_tail_radar_intraday_analysis_service,
     build_tail_radar_query_service,
     build_tail_radar_research_service,
@@ -63,6 +64,22 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="explicitly bypass the normal paid-call cache and create a forced attempt",
     )
+    workflow = commands.add_parser(
+        "workflow",
+        help="execute the complete snapshot-to-research Tail Radar workflow",
+    )
+    workflow.add_argument("--intended-snapshot-time", type=_aware_timestamp, required=True)
+    workflow.add_argument("--analysis-as-of", type=_aware_timestamp)
+    resume = commands.add_parser(
+        "resume",
+        help="resume an incomplete Tail Radar workflow without repeating successful stages",
+    )
+    resume.add_argument("--workflow-run-id", type=_uuid, required=True)
+    resume.add_argument(
+        "--retry-failed-research",
+        action="store_true",
+        help="explicitly create paid forced retries only for previously failed AI analyses",
+    )
     inspect = commands.add_parser("inspect", help="inspect one persisted Tail Radar run")
     inspect.add_argument("--run-id", type=_uuid, required=True)
     return parser
@@ -98,6 +115,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             _emit(research.model_dump(mode="json"))
             return 0 if research.research.status.value in {"succeeded", "no_evidence"} else 1
+        if args.command == "workflow":
+            workflow = build_tail_radar_application_service(get_settings()).execute(
+                intended_snapshot_time=args.intended_snapshot_time,
+                analysis_as_of=args.analysis_as_of,
+            )
+            _emit(workflow.model_dump(mode="json"))
+            return 0 if workflow.workflow.lifecycle.value == "succeeded" else 2
+        if args.command == "resume":
+            workflow = build_tail_radar_application_service(get_settings()).resume(
+                workflow_run_id=args.workflow_run_id,
+                retry_failed_research=args.retry_failed_research,
+            )
+            _emit(workflow.model_dump(mode="json"))
+            return 0 if workflow.workflow.lifecycle.value == "succeeded" else 2
         result = build_tail_radar_screening_service(get_settings()).execute(
             snapshot_id=args.snapshot_id
         )

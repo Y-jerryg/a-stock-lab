@@ -60,6 +60,8 @@ overrides that derived value.
 
 ## Direct frontend workflow
 
+Use Node.js 22.12 or newer for native frontend commands. The Docker and CI toolchains use Node 22.
+
 ```powershell
 Set-Location frontend
 pnpm install --frozen-lockfile
@@ -145,6 +147,26 @@ candidate, prints structured JSON, and is not exposed by public HTTP routes. Ide
 cached before the external call; `--force` deliberately creates another paid attempt. Provider
 timeouts, rate limits, API errors, invalid structured output, and no-evidence results remain local
 to that candidate and do not change the Tail Radar run.
+
+## Complete Tail Radar workflow
+
+Apply migrations before the first complete run. The workflow intentionally combines live market
+data and paid AI research, so use it only with a valid local `.env` and during an intended A-share
+snapshot window:
+
+```powershell
+Set-Location backend
+uv run alembic upgrade head
+uv run tail-radar workflow `
+  --intended-snapshot-time "2026-08-31T14:30:00+08:00"
+
+uv run tail-radar resume `
+  --workflow-run-id <workflow-run-uuid>
+```
+
+Resume reuses completed snapshot, screening, technical, and paid research work. A failed AI attempt
+is also cached and is retried only when `--retry-failed-research` is supplied deliberately. Public
+HTTP routes and the frontend remain read-only; neither can start live or paid execution.
 
 ## Adding work
 

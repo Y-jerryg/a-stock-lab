@@ -182,6 +182,8 @@ def test_future_bars_are_excluded_before_any_feature_calculation() -> None:
 
     assert result.latest_bar_used == eligible[-1]
     assert result.latest_bar_used.ended_at <= as_of
+    assert result.used_bars == eligible
+    assert all(bar.ended_at <= as_of for bar in result.used_bars)
     assert result.data_quality.future_bar_count == 1
     assert IntradayQualityIssue.FUTURE_BARS_EXCLUDED in result.data_quality.issues
     assert result.price.distance_from_intraday_high_pct != pytest.approx((10.14 / 99 - 1) * 100)

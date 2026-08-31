@@ -325,3 +325,142 @@ class TailRadarResearchSourceRecord(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class TailRadarWorkflowRecord(Base):
+    """Durable lifecycle for the complete snapshot-to-research application workflow."""
+
+    __tablename__ = "tail_radar_workflows"
+    __table_args__ = (
+        CheckConstraint(
+            "lifecycle IN ('claimed', 'snapshot_running', 'screening_running', "
+            "'candidate_analysis_running', 'succeeded', 'partial_success', 'failed')",
+            name="lifecycle_valid",
+        ),
+        CheckConstraint(
+            "candidate_count IS NULL OR candidate_count >= 0",
+            name="candidate_count_non_negative",
+        ),
+        CheckConstraint(
+            "technical_succeeded_count >= 0 AND technical_failed_count >= 0 "
+            "AND technical_pending_count >= 0 AND research_succeeded_count >= 0 "
+            "AND research_no_evidence_count >= 0 AND research_failed_count >= 0 "
+            "AND research_pending_count >= 0",
+            name="stage_counts_non_negative",
+        ),
+        CheckConstraint(
+            "candidate_count IS NULL OR "
+            "(technical_succeeded_count + technical_failed_count + "
+            "technical_pending_count = candidate_count AND "
+            "research_succeeded_count + research_no_evidence_count + "
+            "research_failed_count + research_pending_count = candidate_count)",
+            name="stage_counts_cover_candidates",
+        ),
+        CheckConstraint(
+            "screening_run_id IS NULL OR "
+            "(snapshot_run_id IS NOT NULL AND snapshot_id IS NOT NULL "
+            "AND analysis_as_of IS NOT NULL)",
+            name="screening_requires_provenance",
+        ),
+        UniqueConstraint("screening_run_id", name="uq_tail_radar_workflows_screening_run"),
+        Index("ix_tail_radar_workflows_snapshot_id", "snapshot_id"),
+    )
+
+    workflow_run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("execution_runs.run_id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    workflow_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    lifecycle: Mapped[str] = mapped_column(String(32), nullable=False)
+    analysis_as_of: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    snapshot_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("execution_runs.run_id", ondelete="RESTRICT")
+    )
+    snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("market_snapshot_manifests.snapshot_id", ondelete="RESTRICT"),
+    )
+    screening_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tail_radar_runs.run_id", ondelete="RESTRICT")
+    )
+    candidate_count: Mapped[int | None] = mapped_column(Integer)
+    technical_succeeded_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    technical_failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    technical_pending_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    research_succeeded_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    research_no_evidence_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    research_failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    research_pending_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_stage: Mapped[str | None] = mapped_column(String(64))
+    error_code: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class TailRadarWorkflowCandidateRecord(Base):
+    """Per-candidate stage state used for failure isolation and resumability."""
+
+    __tablename__ = "tail_radar_workflow_candidates"
+    __table_args__ = (
+        CheckConstraint(
+            "technical_status IN ('pending', 'running', 'succeeded', 'failed')",
+            name="technical_status_valid",
+        ),
+        CheckConstraint(
+            "research_status IN ('pending', 'running', 'succeeded', 'no_evidence', 'failed')",
+            name="research_status_valid",
+        ),
+        CheckConstraint(
+            "(technical_status = 'succeeded' AND intraday_analysis_id IS NOT NULL "
+            "AND technical_error_code IS NULL) OR "
+            "(technical_status = 'failed' AND intraday_analysis_id IS NULL "
+            "AND technical_error_code IS NOT NULL) OR "
+            "(technical_status IN ('pending', 'running') AND intraday_analysis_id IS NULL "
+            "AND technical_error_code IS NULL)",
+            name="technical_stage_state",
+        ),
+        CheckConstraint(
+            "(research_status IN ('succeeded', 'no_evidence') AND research_id IS NOT NULL "
+            "AND research_error_code IS NULL) OR "
+            "(research_status = 'failed' AND research_id IS NULL "
+            "AND research_error_code IS NOT NULL) OR "
+            "(research_status IN ('pending', 'running') AND research_id IS NULL "
+            "AND research_error_code IS NULL)",
+            name="research_stage_state",
+        ),
+        Index("ix_tail_radar_workflow_candidates_candidate", "candidate_id"),
+    )
+
+    workflow_run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tail_radar_workflows.workflow_run_id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    candidate_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tail_radar_candidates.candidate_id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    technical_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    research_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    intraday_analysis_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tail_radar_intraday_analyses.analysis_id", ondelete="RESTRICT"),
+    )
+    research_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tail_radar_research_analyses.research_id", ondelete="RESTRICT"),
+    )
+    technical_error_code: Mapped[str | None] = mapped_column(String(128))
+    research_error_code: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )

@@ -1,16 +1,146 @@
 import { render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, vi } from 'vitest';
 
 import { App } from './App';
 
-describe('application navigation', () => {
-  it('renders the Tail Radar empty state without fake results', async () => {
+describe('Tail Radar navigation', () => {
+  beforeEach(() => {
     window.location.hash = '#/tail-radar';
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('renders the honest empty state when no persisted run exists', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: { code: 'tail_radar_run_not_found', message: 'No run.' },
+          }),
+          { status: 404, headers: { 'Content-Type': 'application/json' } },
+        ),
+      ),
+    );
     render(<App />);
 
     expect(
       await screen.findByRole('heading', { name: 'Tail Radar', level: 1 }),
     ).toBeInTheDocument();
-    expect(screen.getByText('No research run has been produced')).toBeInTheDocument();
+    expect(await screen.findByText('No persisted Tail Radar run')).toBeInTheDocument();
     expect(screen.queryByText(/stock price/i)).not.toBeInTheDocument();
+  });
+
+  it('renders real overview metrics and candidate evidence from read APIs', async () => {
+    const run = {
+      run_id: '11111111-1111-4111-8111-111111111111',
+      snapshot_id: '22222222-2222-4222-8222-222222222222',
+      trade_date: '2026-08-28',
+      intended_snapshot_time: '2026-08-28T14:30:00+08:00',
+      actual_started_at: '2026-08-28T14:31:00+08:00',
+      actual_finished_at: '2026-08-28T14:31:01+08:00',
+      status: 'succeeded',
+      screening_rule_version: 'tail-radar-screen-v1',
+      is_official: true,
+      evaluated_record_count: 5000,
+      invalid_record_count: 0,
+      candidate_count: 1,
+      error_code: null,
+    };
+    const responses: Record<string, object> = {
+      '/api/v1/tail-radar/runs/latest': run,
+      [`/api/v1/tail-radar/runs/${run.run_id}/summary`]: {
+        run,
+        workflow: {
+          workflow_run_id: '33333333-3333-4333-8333-333333333333',
+          workflow_version: 'tail-radar-workflow-v1',
+          lifecycle: 'partial_success',
+          execution_status: 'succeeded',
+          analysis_as_of: '2026-08-28T14:35:00+08:00',
+          candidate_count: 1,
+          technical_succeeded_count: 1,
+          technical_failed_count: 0,
+          technical_pending_count: 0,
+          research_succeeded_count: 0,
+          research_no_evidence_count: 0,
+          research_failed_count: 1,
+          research_pending_count: 0,
+          error_stage: null,
+          error_code: null,
+          actual_started_at: '2026-08-28T14:30:00+08:00',
+          actual_finished_at: '2026-08-28T14:36:00+08:00',
+        },
+        snapshot: {
+          snapshot_run_id: '44444444-4444-4444-8444-444444444444',
+          snapshot_id: run.snapshot_id,
+          provider: 'akshare',
+          provider_version: 'fixture',
+          intended_snapshot_time: run.intended_snapshot_time,
+          actual_fetch_started_at: '2026-08-28T14:30:01+08:00',
+          actual_fetch_finished_at: '2026-08-28T14:30:03+08:00',
+          provider_timestamp: null,
+          persisted_at: '2026-08-28T14:30:04+08:00',
+          latency_ms: 2000,
+          row_count: 5000,
+          schema_version: 2,
+          quality_report: { passed: true, issues: [] },
+        },
+      },
+    };
+    const candidatePage = {
+      items: [
+        {
+          candidate_id: '55555555-5555-4555-8555-555555555555',
+          run_id: run.run_id,
+          snapshot_id: run.snapshot_id,
+          symbol: '600000',
+          exchange: 'shanghai',
+          name: '浦发银行',
+          price: 10.25,
+          pct_change: 2.5,
+          amount: 100000000,
+          turnover_rate: 1.2,
+          as_of: '2026-08-28T14:30:03+08:00',
+          screening_rule_version: 'tail-radar-screen-v1',
+          intraday_position: 0.75,
+          distance_from_high_pct: -0.2,
+          previous_5m_return_pct: 0.1,
+          previous_15m_return_pct: 0.3,
+          previous_30m_return_pct: 0.5,
+          technical_status: 'succeeded',
+          research_status: 'failed',
+        },
+      ],
+      total: 1,
+      page: 1,
+      page_size: 100,
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((input: RequestInfo | URL) => {
+        const inputUrl =
+          input instanceof Request ? input.url : input instanceof URL ? input.href : input;
+        const path = new URL(inputUrl, 'http://localhost').pathname;
+        const payload = path.endsWith('/candidates') ? candidatePage : responses[path];
+        return Promise.resolve(
+          new Response(JSON.stringify(payload), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        );
+      }),
+    );
+
+    render(<App />);
+
+    expect(await screen.findByText('浦发银行')).toBeInTheDocument();
+    expect(screen.getByText('5,000')).toBeInTheDocument();
+    expect(screen.getByText('partial success')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '600000' })).toHaveAttribute(
+      'href',
+      '#/tail-radar/candidates/55555555-5555-4555-8555-555555555555',
+    );
   });
 });

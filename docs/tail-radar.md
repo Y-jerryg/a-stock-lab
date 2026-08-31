@@ -67,6 +67,7 @@ All routes are read-only:
 GET /api/v1/tail-radar/runs/latest
 GET /api/v1/tail-radar/runs?page=1&page_size=20
 GET /api/v1/tail-radar/runs/{run_id}
+GET /api/v1/tail-radar/runs/{run_id}/summary
 GET /api/v1/tail-radar/runs/{run_id}/candidates?page=1&page_size=50
 GET /api/v1/tail-radar/candidates/{candidate_id}
 ```
@@ -78,7 +79,7 @@ route that executes screening or fetches live market data.
 
 ## Phase 4 intraday feature analysis
 
-`tail-radar-intraday-v1` analyzes one persisted candidate at an explicit aware
+`tail-radar-intraday-v2` analyzes one persisted candidate at an explicit aware
 `analysis_as_of`. It uses normalized unadjusted five-minute bars only. Code excludes future bars
 before quality checks or calculations; the persisted report records future, duplicate, missing,
 out-of-order, malformed, and off-session observations.
@@ -87,6 +88,10 @@ Persisted price features are previous 5/15/30-minute return, return since open, 
 intraday high/low, normalized intraday position, and drawdown from the high. Volume/value features
 are recent and prior comparable five-minute volume, acceleration ratio, recent amount, cumulative
 VWAP, and distance from VWAP. Unavailable evidence produces `null` fields.
+
+Schema 2 also retains the ordered normalized bars actually used after the point-in-time cutoff. They
+are presentation evidence for the public intraday chart; future, duplicate-invalid, and off-session
+bars are never placed in that used series.
 
 The explicit conditions `steady_strengthening`, `late_acceleration`,
 `early_spike_followed_by_pullback`, `recovery_from_intraday_weakness`, and
@@ -153,3 +158,42 @@ Add `--force` only for an intentional additional paid attempt. No normal test ma
 request, and no public route starts research. Candidate detail exposes the latest successful or
 no-evidence research and its sources; private provider response IDs, token accounting, and raw
 provider metadata stay backend-side.
+
+## Phase 6 complete application workflow
+
+`TailRadarApplicationService` composes the existing official snapshot execution, quality gate,
+screening, candidate persistence, intraday analysis, and web-research services. It adds lifecycle
+orchestration only; every underlying rule and provider boundary remains authoritative in its
+existing service.
+
+The workflow states are `claimed`, `snapshot_running`, `screening_running`,
+`candidate_analysis_running`, `succeeded`, `partial_success`, and `failed`. Each candidate separately
+records technical and research stage state. One candidate provider failure does not roll back other
+candidates. Resume skips successful technical artifacts and successful/no-evidence AI research.
+Failed AI work is retried only with an explicit paid flag.
+
+```powershell
+uv run tail-radar workflow `
+  --intended-snapshot-time "2026-08-31T14:30:00+08:00"
+
+uv run tail-radar resume `
+  --workflow-run-id <workflow-run-uuid>
+
+# Explicitly creates paid forced attempts only for previously failed candidate research:
+uv run tail-radar resume `
+  --workflow-run-id <workflow-run-uuid> `
+  --retry-failed-research
+```
+
+The optional `--analysis-as-of` fixes a later explicit boundary. If omitted, the workflow fixes the
+boundary after screening. All public routes remain GET-only. Run summary exposes snapshot latency,
+counts, quality and workflow completion; candidate collections expose overview features and stage
+status; candidate detail exposes used bars, versions, research claims and separate source records.
+
+## Phase 7 public frontend
+
+The Tail Radar hash route renders the latest persisted run, metrics, completion state and a sortable,
+searchable, filterable, paginated candidate table. Candidate detail clearly labels raw snapshot
+evidence, deterministic intraday calculations, and AI interpretation. The ECharts series uses only
+persisted used bars. Missing values remain `—` or an explicit empty state. Source links open their
+original URLs; the browser never receives `OPENAI_API_KEY` and cannot start a workflow.

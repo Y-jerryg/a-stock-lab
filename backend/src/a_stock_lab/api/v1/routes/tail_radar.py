@@ -10,6 +10,9 @@ from a_stock_lab.api.v1.schemas.tail_radar import (
     TailRadarCandidateSummaryResponse,
     TailRadarRunListResponse,
     TailRadarRunResponse,
+    TailRadarRunSummaryResponse,
+    TailRadarSnapshotMetricsResponse,
+    TailRadarWorkflowResponse,
 )
 from a_stock_lab.api.v1.services.tail_radar import get_tail_radar_query_service
 from a_stock_lab.features.tail_radar.application.queries import TailRadarQueryService
@@ -70,16 +73,40 @@ def candidate_list(
             message="The Tail Radar run was not found.",
             status_code=status.HTTP_404_NOT_FOUND,
         )
-    result = service.list_candidates(
+    result = service.list_candidate_overviews(
         run_id=run_id,
         offset=(page - 1) * page_size,
         limit=page_size,
     )
     return TailRadarCandidateListResponse(
-        items=tuple(TailRadarCandidateSummaryResponse.from_data(item) for item in result.items),
+        items=tuple(TailRadarCandidateSummaryResponse.from_overview(item) for item in result.items),
         total=result.total,
         page=page,
         page_size=page_size,
+    )
+
+
+@router.get("/runs/{run_id}/summary", response_model=TailRadarRunSummaryResponse)
+def run_summary(run_id: UUID, service: QueryService) -> TailRadarRunSummaryResponse:
+    run = service.get_run(run_id)
+    if run is None:
+        raise ApplicationError(
+            code="tail_radar_run_not_found",
+            message="The Tail Radar run was not found.",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+    snapshot = service.get_snapshot(run.snapshot_id)
+    if snapshot is None:
+        raise ApplicationError(
+            code="tail_radar_snapshot_not_found",
+            message="The Tail Radar source snapshot was not found.",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    workflow = service.get_workflow_for_run(run_id)
+    return TailRadarRunSummaryResponse(
+        run=TailRadarRunResponse.from_data(run),
+        workflow=None if workflow is None else TailRadarWorkflowResponse.from_data(workflow),
+        snapshot=TailRadarSnapshotMetricsResponse.from_data(snapshot),
     )
 
 
@@ -99,4 +126,5 @@ def candidate_detail(
         candidate,
         service.get_latest_intraday_analysis(candidate_id),
         service.get_latest_research(candidate_id),
+        service.get_candidate_workflow_state(candidate_id),
     )

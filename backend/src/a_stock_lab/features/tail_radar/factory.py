@@ -7,6 +7,9 @@ from a_stock_lab.features.tail_radar.adapters.postgres import PostgresTailRadarR
 from a_stock_lab.features.tail_radar.application.intraday_service import (
     TailRadarIntradayAnalysisService,
 )
+from a_stock_lab.features.tail_radar.application.orchestration_service import (
+    TailRadarApplicationService,
+)
 from a_stock_lab.features.tail_radar.application.queries import TailRadarQueryService
 from a_stock_lab.features.tail_radar.application.research_service import TailRadarResearchService
 from a_stock_lab.features.tail_radar.application.service import TailRadarScreeningService
@@ -15,6 +18,7 @@ from a_stock_lab.features.tail_radar.domain.intraday import IntradayFeatureEngin
 from a_stock_lab.features.tail_radar.domain.screening import TailRadarScreeningRule
 from a_stock_lab.shared.market_data.adapters.factory import build_market_data_provider
 from a_stock_lab.shared.market_data.adapters.parquet import ParquetMarketSnapshotReader
+from a_stock_lab.shared.market_data.execution_factory import build_snapshot_execution_engine
 
 
 def build_tail_radar_repository() -> PostgresTailRadarRepository:
@@ -64,4 +68,16 @@ def build_tail_radar_research_service(settings: Settings) -> TailRadarResearchSe
     return TailRadarResearchService(
         provider=provider,
         repository=build_tail_radar_repository(),
+    )
+
+
+def build_tail_radar_application_service(settings: Settings) -> TailRadarApplicationService:
+    repository = build_tail_radar_repository()
+    return TailRadarApplicationService(
+        snapshot_execution=build_snapshot_execution_engine(settings),
+        screening=build_tail_radar_screening_service(settings),
+        intraday=build_tail_radar_intraday_analysis_service(settings),
+        research=build_tail_radar_research_service(settings),
+        tail_radar_repository=repository,
+        workflow_repository=repository,
     )

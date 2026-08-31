@@ -12,6 +12,7 @@ from a_stock_lab.shared.execution.models import RunStatus
 
 SNAPSHOT_ID = UUID("11111111-1111-1111-1111-111111111111")
 CANDIDATE_ID = UUID("22222222-2222-2222-2222-222222222222")
+WORKFLOW_ID = UUID("33333333-3333-4333-8333-333333333333")
 
 
 class FakeResult:
@@ -169,3 +170,83 @@ def test_cli_runs_paid_research_only_with_explicit_candidate_as_of_and_force(
         "force": True,
     }
     assert payload["research"]["status"] == "succeeded"
+
+
+def test_cli_executes_and_resumes_complete_workflow_explicitly(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[dict[str, object]] = []
+
+    class FakeWorkflowResult:
+        workflow = SimpleNamespace(lifecycle=SimpleNamespace(value="succeeded"))
+
+        def model_dump(self, *, mode: str) -> dict[str, Any]:
+            assert mode == "json"
+            return {"disposition": "created", "workflow": {"lifecycle": "succeeded"}}
+
+    class FakeApplicationService:
+        def execute(
+            self,
+            *,
+            intended_snapshot_time: datetime,
+            analysis_as_of: datetime | None,
+        ) -> FakeWorkflowResult:
+            captured.append(
+                {
+                    "operation": "execute",
+                    "intended": intended_snapshot_time,
+                    "analysis_as_of": analysis_as_of,
+                }
+            )
+            return FakeWorkflowResult()
+
+        def resume(
+            self, *, workflow_run_id: UUID, retry_failed_research: bool
+        ) -> FakeWorkflowResult:
+            captured.append(
+                {
+                    "operation": "resume",
+                    "workflow_run_id": workflow_run_id,
+                    "retry_failed_research": retry_failed_research,
+                }
+            )
+            return FakeWorkflowResult()
+
+    monkeypatch.setattr(execution_cli, "get_settings", object)
+    monkeypatch.setattr(
+        execution_cli,
+        "build_tail_radar_application_service",
+        lambda _: FakeApplicationService(),
+    )
+
+    execute_code = execution_cli.main(
+        [
+            "workflow",
+            "--intended-snapshot-time",
+            "2026-08-28T14:30:00+08:00",
+            "--analysis-as-of",
+            "2026-08-28T14:35:00+08:00",
+        ]
+    )
+    execute_payload = json.loads(capsys.readouterr().out)
+    resume_code = execution_cli.main(
+        [
+            "resume",
+            "--workflow-run-id",
+            str(WORKFLOW_ID),
+            "--retry-failed-research",
+        ]
+    )
+    resume_payload = json.loads(capsys.readouterr().out)
+
+    assert execute_code == 0
+    assert resume_code == 0
+    assert execute_payload["workflow"]["lifecycle"] == "succeeded"
+    assert resume_payload["workflow"]["lifecycle"] == "succeeded"
+    assert captured[0]["intended"] == datetime(2026, 8, 28, 14, 30, tzinfo=MARKET_TIME_ZONE)
+    assert captured[1] == {
+        "operation": "resume",
+        "workflow_run_id": WORKFLOW_ID,
+        "retry_failed_research": True,
+    }

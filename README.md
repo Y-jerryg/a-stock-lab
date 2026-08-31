@@ -163,6 +163,25 @@ including a failed or no-evidence attempt, without another paid call. Use `--for
 paid attempt is intentional. Normal tests mock OpenAI and never use the network. See
 [Tail Radar documentation](docs/tail-radar.md) for timestamp and source-integrity rules.
 
+## Complete Tail Radar workflow and UI
+
+After applying the latest migration, an internal operator can execute or resume the complete
+point-in-time workflow:
+
+```powershell
+Set-Location backend
+uv run alembic upgrade head
+uv run tail-radar workflow `
+  --intended-snapshot-time "2026-08-31T14:30:00+08:00"
+uv run tail-radar resume --workflow-run-id <workflow-run-uuid>
+```
+
+Resume skips completed deterministic work and completed or no-evidence paid research. Retrying a
+failed paid attempt requires the explicit `--retry-failed-research` flag. The Tail Radar browser UI
+is read-only and uses hash routes, preserving static GitHub Pages compatibility. It renders only
+persisted snapshot evidence, deterministic calculations, and separately labelled AI interpretation;
+it never starts a scan or receives backend secrets.
+
 ## Quality commands
 
 ```powershell

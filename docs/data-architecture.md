@@ -29,6 +29,10 @@ The durable relational contracts are:
 - `tail_radar_research_sources` stores source URLs separately with title/domain, verified or
   uncertain publication timing, retrieval timing, historical availability classification, and
   claim relationships. Unknown metadata remains null rather than being fabricated.
+- `tail_radar_workflows` extends one shared execution run with snapshot, screening, fixed
+  `analysis_as_of`, lifecycle, aggregate technical/research counts, and fatal-stage metadata.
+- `tail_radar_workflow_candidates` stores isolated technical/research stage state and immutable
+  artifact/analysis links for every candidate, enabling safe resume after partial completion.
 
 Artifact type names are namespaced (for example `tail_radar.candidate`) and payload consumers
 must select a supported `schema_version`. The schema remains flexible without sacrificing indexed,
@@ -51,6 +55,11 @@ confidence, evidence quality, and explicit `analysis_as_of`. A partial unique in
 non-forced attempt for
 `(candidate, run, analysis_as_of, prompt_version, provider, requested_model)`. Forced attempts are
 separate rows linked to the cached base attempt; no result is overwritten.
+
+Phase 6 publishes no replacement aggregate signal. It orchestrates the existing candidate,
+intraday-feature, and web-research artifacts and records their progress relationally. Phase 7 uses
+intraday artifact schema 2, which adds only the exact normalized, ordered, cutoff-safe bars used by
+`tail-radar-intraday-v2`; deterministic formulas remain unchanged.
 
 ## Parquet: large immutable datasets
 

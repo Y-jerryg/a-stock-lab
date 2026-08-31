@@ -7,8 +7,10 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validato
 from a_stock_lab.core.time import MARKET_TIME_ZONE, as_market_timezone
 from a_stock_lab.shared.market_data.models import IntradayBar, ProviderIntradayBarBatch
 
-INTRADAY_FEATURE_SCHEMA_VERSION = 1
-INTRADAY_CALCULATION_VERSION = "tail-radar-intraday-v1"
+INTRADAY_FEATURE_SCHEMA_VERSION = 2
+INTRADAY_CALCULATION_VERSION = "tail-radar-intraday-v2"
+LEGACY_INTRADAY_FEATURE_SCHEMA_VERSION = 1
+LEGACY_INTRADAY_CALCULATION_VERSION = "tail-radar-intraday-v1"
 _BAR_INTERVAL = timedelta(minutes=5)
 _MORNING_FIRST_END = time(9, 35)
 _MORNING_LAST_END = time(11, 30)
@@ -65,8 +67,7 @@ class IntradayFeatureConfiguration(BaseModel):
             self.materially_below_peak_min_drawdown_pct,
         ) != (0.5, 0.3, 0.5, 0.3, 30, 1.0, 1.0, 0.5, 0.8, 0.6, 1.0):
             raise ValueError(
-                "tail-radar-intraday-v1 thresholds are immutable; "
-                "create a new version to change them"
+                "Tail Radar intraday thresholds are immutable; create a new version to change them"
             )
         return self
 
@@ -136,6 +137,7 @@ class IntradayFeatureComputation(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     analysis_as_of: AwareDatetime
+    used_bars: tuple[IntradayBar, ...]
     latest_bar_used: IntradayBar | None
     price: IntradayPriceFeatures
     volume: IntradayVolumeFeatures
@@ -149,8 +151,17 @@ class IntradayFeatureComputation(BaseModel):
 
     @model_validator(mode="after")
     def enforce_point_in_time_boundary(self) -> "IntradayFeatureComputation":
-        if self.latest_bar_used is not None and self.latest_bar_used.ended_at > self.analysis_as_of:
-            raise ValueError("latest bar used cannot be later than analysis_as_of")
+        if any(bar.ended_at > self.analysis_as_of for bar in self.used_bars):
+            raise ValueError("used bars cannot be later than analysis_as_of")
+        if tuple(sorted(self.used_bars, key=lambda bar: bar.ended_at)) != self.used_bars:
+            raise ValueError("used bars must be ordered")
+        if len({bar.ended_at for bar in self.used_bars}) != len(self.used_bars):
+            raise ValueError("used bars must have unique timestamps")
+        expected_latest = None if not self.used_bars else self.used_bars[-1]
+        if self.latest_bar_used != expected_latest:
+            raise ValueError("latest bar must agree with the persisted used-bar series")
+        if self.data_quality.used_bar_count != len(self.used_bars):
+            raise ValueError("used-bar series must agree with the quality report")
         return self
 
 
@@ -232,6 +243,7 @@ class IntradayFeatureEngine:
         if not ordered:
             return IntradayFeatureComputation(
                 analysis_as_of=as_of,
+                used_bars=(),
                 latest_bar_used=None,
                 price=IntradayPriceFeatures(),
                 volume=IntradayVolumeFeatures(),
@@ -264,6 +276,7 @@ class IntradayFeatureEngine:
         )
         return IntradayFeatureComputation(
             analysis_as_of=as_of,
+            used_bars=ordered,
             latest_bar_used=latest,
             price=price,
             volume=volume,

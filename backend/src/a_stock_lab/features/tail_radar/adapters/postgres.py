@@ -14,6 +14,8 @@ from a_stock_lab.features.tail_radar.adapters.persistence_models import (
     TailRadarResearchRecord,
     TailRadarResearchSourceRecord,
     TailRadarRunRecord,
+    TailRadarWorkflowCandidateRecord,
+    TailRadarWorkflowRecord,
 )
 from a_stock_lab.features.tail_radar.application.intraday_models import (
     TAIL_RADAR_INTRADAY_ARTIFACT_TYPE,
@@ -33,6 +35,14 @@ from a_stock_lab.features.tail_radar.application.models import (
     TailRadarRunData,
     TailRadarRunPage,
     tail_radar_execution_version,
+)
+from a_stock_lab.features.tail_radar.application.orchestration_models import (
+    TAIL_RADAR_WORKFLOW_JOB_TYPE,
+    TailRadarCandidateStageStatus,
+    TailRadarWorkflowCandidateState,
+    TailRadarWorkflowClaim,
+    TailRadarWorkflowData,
+    TailRadarWorkflowLifecycle,
 )
 from a_stock_lab.features.tail_radar.application.research_models import (
     TAIL_RADAR_RESEARCH_ARTIFACT_TYPE,
@@ -445,6 +455,29 @@ class PostgresTailRadarRepository:
                     "latest Tail Radar intraday analysis could not be read"
                 ) from exc
 
+    def get_latest_intraday_analyses(
+        self, candidate_ids: Sequence[UUID]
+    ) -> dict[UUID, TailRadarIntradayAnalysisData]:
+        if not candidate_ids:
+            return {}
+        with self._session_factory() as session:
+            try:
+                rows = session.execute(
+                    self._intraday_select()
+                    .where(TailRadarIntradayAnalysisRecord.candidate_id.in_(candidate_ids))
+                    .distinct(TailRadarIntradayAnalysisRecord.candidate_id)
+                    .order_by(
+                        TailRadarIntradayAnalysisRecord.candidate_id,
+                        TailRadarIntradayAnalysisRecord.analysis_as_of.desc(),
+                        ResearchArtifact.created_at.desc(),
+                    )
+                ).all()
+                return {row[0].candidate_id: self._intraday_data(*row._tuple()) for row in rows}
+            except (SQLAlchemyError, ValidationError) as exc:
+                raise TailRadarPersistenceError(
+                    "latest Tail Radar intraday analyses could not be read"
+                ) from exc
+
     def get_intraday_analysis_at_or_before(
         self, *, candidate_id: UUID, analysis_as_of: datetime
     ) -> TailRadarIntradayAnalysisData | None:
@@ -815,6 +848,567 @@ class PostgresTailRadarRepository:
                     "latest Tail Radar web research could not be read"
                 ) from exc
 
+    def claim_workflow(
+        self,
+        *,
+        intended_snapshot_time: datetime,
+        requested_analysis_as_of: datetime | None,
+        workflow_version: str,
+        started_at: datetime,
+    ) -> TailRadarWorkflowClaim:
+        with self._session_factory() as session:
+            try:
+                existing = self._find_workflow(
+                    session,
+                    intended_snapshot_time=intended_snapshot_time,
+                    workflow_version=workflow_version,
+                )
+                if existing is not None:
+                    run, workflow = existing
+                    if (
+                        requested_analysis_as_of is not None
+                        and workflow.analysis_as_of != requested_analysis_as_of
+                    ):
+                        raise TailRadarPersistenceError(
+                            "Tail Radar workflow analysis_as_of conflicts with its "
+                            "official identity"
+                        )
+                    return TailRadarWorkflowClaim(
+                        workflow=self._workflow_data(run, workflow),
+                        created=False,
+                    )
+                run = ExecutionRun(
+                    job_type=TAIL_RADAR_WORKFLOW_JOB_TYPE,
+                    trade_date=intended_snapshot_time.date(),
+                    intended_execution_time=intended_snapshot_time,
+                    actual_started_at=started_at,
+                    status=RunStatus.RUNNING,
+                    provider=None,
+                    implementation_version=workflow_version,
+                    is_official=True,
+                    run_metadata={},
+                )
+                session.add(run)
+                session.flush()
+                workflow = TailRadarWorkflowRecord(
+                    workflow_run_id=run.run_id,
+                    workflow_version=workflow_version,
+                    lifecycle=TailRadarWorkflowLifecycle.CLAIMED.value,
+                    analysis_as_of=requested_analysis_as_of,
+                    candidate_count=None,
+                    technical_succeeded_count=0,
+                    technical_failed_count=0,
+                    technical_pending_count=0,
+                    research_succeeded_count=0,
+                    research_no_evidence_count=0,
+                    research_failed_count=0,
+                    research_pending_count=0,
+                )
+                session.add(workflow)
+                session.flush()
+                data = self._workflow_data(run, workflow)
+            except TailRadarPersistenceError:
+                session.rollback()
+                raise
+            except IntegrityError as exc:
+                session.rollback()
+                try:
+                    existing = self._find_workflow(
+                        session,
+                        intended_snapshot_time=intended_snapshot_time,
+                        workflow_version=workflow_version,
+                    )
+                except SQLAlchemyError as lookup_error:
+                    raise TailRadarPersistenceError(
+                        "conflicting Tail Radar workflow could not be read"
+                    ) from lookup_error
+                if existing is None:
+                    raise TailRadarPersistenceError(
+                        "Tail Radar workflow could not be claimed"
+                    ) from exc
+                run, workflow = existing
+                if (
+                    requested_analysis_as_of is not None
+                    and workflow.analysis_as_of != requested_analysis_as_of
+                ):
+                    raise TailRadarPersistenceError(
+                        "Tail Radar workflow analysis_as_of conflicts with its official identity"
+                    ) from exc
+                return TailRadarWorkflowClaim(
+                    workflow=self._workflow_data(run, workflow),
+                    created=False,
+                )
+            except SQLAlchemyError as exc:
+                session.rollback()
+                raise TailRadarPersistenceError("Tail Radar workflow could not be claimed") from exc
+            try:
+                session.commit()
+            except SQLAlchemyError as exc:
+                raise TailRadarCommitUncertainError(
+                    "Tail Radar workflow claim commit outcome is uncertain"
+                ) from exc
+            return TailRadarWorkflowClaim(workflow=data, created=True)
+
+    def get_workflow(self, workflow_run_id: UUID) -> TailRadarWorkflowData | None:
+        with self._session_factory() as session:
+            try:
+                row = session.execute(
+                    self._workflow_select().where(
+                        TailRadarWorkflowRecord.workflow_run_id == workflow_run_id
+                    )
+                ).one_or_none()
+                return None if row is None else self._workflow_data(*row._tuple())
+            except (SQLAlchemyError, ValidationError) as exc:
+                raise TailRadarPersistenceError("Tail Radar workflow could not be read") from exc
+
+    def get_workflow_for_screening_run(
+        self, screening_run_id: UUID
+    ) -> TailRadarWorkflowData | None:
+        with self._session_factory() as session:
+            try:
+                row = session.execute(
+                    self._workflow_select().where(
+                        TailRadarWorkflowRecord.screening_run_id == screening_run_id
+                    )
+                ).one_or_none()
+                return None if row is None else self._workflow_data(*row._tuple())
+            except (SQLAlchemyError, ValidationError) as exc:
+                raise TailRadarPersistenceError("Tail Radar workflow could not be read") from exc
+
+    def set_workflow_lifecycle(
+        self,
+        *,
+        workflow_run_id: UUID,
+        lifecycle: TailRadarWorkflowLifecycle,
+    ) -> TailRadarWorkflowData:
+        if lifecycle in {
+            TailRadarWorkflowLifecycle.SUCCEEDED,
+            TailRadarWorkflowLifecycle.PARTIAL_SUCCESS,
+            TailRadarWorkflowLifecycle.FAILED,
+        }:
+            raise TailRadarPersistenceError("terminal workflow states require explicit completion")
+        with self._session_factory() as session:
+            try:
+                run, workflow = self._locked_workflow(session, workflow_run_id)
+                run.status = RunStatus.RUNNING
+                run.actual_finished_at = None
+                run.error_code = None
+                run.error_message = None
+                run.error_details = None
+                workflow.lifecycle = lifecycle.value
+                workflow.error_stage = None
+                workflow.error_code = None
+                session.flush()
+                data = self._workflow_data(run, workflow)
+            except TailRadarPersistenceError:
+                session.rollback()
+                raise
+            except SQLAlchemyError as exc:
+                session.rollback()
+                raise TailRadarPersistenceError(
+                    "Tail Radar workflow lifecycle could not be updated"
+                ) from exc
+            self._commit_workflow(session, "lifecycle")
+            return data
+
+    def attach_workflow_snapshot(
+        self,
+        *,
+        workflow_run_id: UUID,
+        snapshot_run_id: UUID,
+        snapshot_id: UUID,
+    ) -> TailRadarWorkflowData:
+        with self._session_factory() as session:
+            try:
+                run, workflow = self._locked_workflow(session, workflow_run_id)
+                manifest = session.scalar(
+                    select(MarketSnapshotManifestRecord)
+                    .join(ExecutionRun, ExecutionRun.run_id == MarketSnapshotManifestRecord.run_id)
+                    .where(
+                        MarketSnapshotManifestRecord.snapshot_id == snapshot_id,
+                        MarketSnapshotManifestRecord.run_id == snapshot_run_id,
+                        MarketSnapshotManifestRecord.status == SnapshotManifestStatus.AVAILABLE,
+                        ExecutionRun.status == RunStatus.SUCCEEDED,
+                        ExecutionRun.is_official.is_(True),
+                        ExecutionRun.job_type == FULL_MARKET_SNAPSHOT_JOB_TYPE,
+                    )
+                )
+                if manifest is None:
+                    raise TailRadarPersistenceError(
+                        "workflow snapshot is not a successful official manifest"
+                    )
+                if workflow.snapshot_id not in {
+                    None,
+                    snapshot_id,
+                } or workflow.snapshot_run_id not in {
+                    None,
+                    snapshot_run_id,
+                }:
+                    raise TailRadarPersistenceError("workflow snapshot linkage is immutable")
+                workflow.snapshot_run_id = snapshot_run_id
+                workflow.snapshot_id = snapshot_id
+                session.flush()
+                data = self._workflow_data(run, workflow)
+            except TailRadarPersistenceError:
+                session.rollback()
+                raise
+            except SQLAlchemyError as exc:
+                session.rollback()
+                raise TailRadarPersistenceError(
+                    "Tail Radar workflow snapshot could not be attached"
+                ) from exc
+            self._commit_workflow(session, "snapshot linkage")
+            return data
+
+    def attach_workflow_screening(
+        self,
+        *,
+        workflow_run_id: UUID,
+        screening_run_id: UUID,
+        analysis_as_of: datetime,
+        candidate_ids: Sequence[UUID],
+    ) -> TailRadarWorkflowData:
+        if len(set(candidate_ids)) != len(candidate_ids):
+            raise TailRadarPersistenceError("workflow candidate IDs must be unique")
+        with self._session_factory() as session:
+            try:
+                run, workflow = self._locked_workflow(session, workflow_run_id)
+                screening_row = session.execute(
+                    select(TailRadarRunRecord, ExecutionRun)
+                    .join(ExecutionRun, ExecutionRun.run_id == TailRadarRunRecord.run_id)
+                    .where(TailRadarRunRecord.run_id == screening_run_id)
+                ).one_or_none()
+                screening = None if screening_row is None else screening_row[0]
+                screening_execution = None if screening_row is None else screening_row[1]
+                if (
+                    screening is None
+                    or screening_execution is None
+                    or screening_execution.status is not RunStatus.SUCCEEDED
+                    or not screening_execution.is_official
+                    or screening.snapshot_id != workflow.snapshot_id
+                    or screening.candidate_count != len(candidate_ids)
+                ):
+                    raise TailRadarPersistenceError(
+                        "workflow screening is not a successful official result matching its "
+                        "snapshot and candidates"
+                    )
+                persisted_ids = set(
+                    session.scalars(
+                        select(TailRadarCandidateRecord.candidate_id).where(
+                            TailRadarCandidateRecord.run_id == screening_run_id
+                        )
+                    ).all()
+                )
+                if persisted_ids != set(candidate_ids):
+                    raise TailRadarPersistenceError(
+                        "workflow candidate set does not match persisted screening output"
+                    )
+                if workflow.screening_run_id not in {None, screening_run_id}:
+                    raise TailRadarPersistenceError("workflow screening linkage is immutable")
+                if workflow.analysis_as_of not in {None, analysis_as_of}:
+                    raise TailRadarPersistenceError("workflow analysis_as_of is immutable")
+                workflow.screening_run_id = screening_run_id
+                workflow.analysis_as_of = analysis_as_of
+                existing_ids = set(
+                    session.scalars(
+                        select(TailRadarWorkflowCandidateRecord.candidate_id).where(
+                            TailRadarWorkflowCandidateRecord.workflow_run_id == workflow_run_id
+                        )
+                    ).all()
+                )
+                session.add_all(
+                    [
+                        TailRadarWorkflowCandidateRecord(
+                            workflow_run_id=workflow_run_id,
+                            candidate_id=candidate_id,
+                            technical_status=TailRadarCandidateStageStatus.PENDING.value,
+                            research_status=TailRadarCandidateStageStatus.PENDING.value,
+                        )
+                        for candidate_id in candidate_ids
+                        if candidate_id not in existing_ids
+                    ]
+                )
+                workflow.candidate_count = len(candidate_ids)
+                workflow.technical_pending_count = len(candidate_ids)
+                workflow.research_pending_count = len(candidate_ids)
+                workflow.technical_succeeded_count = 0
+                workflow.technical_failed_count = 0
+                workflow.research_succeeded_count = 0
+                workflow.research_no_evidence_count = 0
+                workflow.research_failed_count = 0
+                session.flush()
+                self._refresh_workflow_counts(session, workflow)
+                data = self._workflow_data(run, workflow)
+            except TailRadarPersistenceError:
+                session.rollback()
+                raise
+            except (IntegrityError, SQLAlchemyError) as exc:
+                session.rollback()
+                raise TailRadarPersistenceError(
+                    "Tail Radar workflow screening could not be attached"
+                ) from exc
+            self._commit_workflow(session, "screening linkage")
+            return data
+
+    def list_workflow_candidate_states(
+        self, workflow_run_id: UUID
+    ) -> tuple[TailRadarWorkflowCandidateState, ...]:
+        with self._session_factory() as session:
+            try:
+                rows = session.scalars(
+                    select(TailRadarWorkflowCandidateRecord)
+                    .where(TailRadarWorkflowCandidateRecord.workflow_run_id == workflow_run_id)
+                    .order_by(TailRadarWorkflowCandidateRecord.candidate_id)
+                ).all()
+                return tuple(self._workflow_candidate_data(row) for row in rows)
+            except (SQLAlchemyError, ValidationError) as exc:
+                raise TailRadarPersistenceError(
+                    "Tail Radar workflow candidate states could not be read"
+                ) from exc
+
+    def get_candidate_workflow_state(
+        self, candidate_id: UUID
+    ) -> TailRadarWorkflowCandidateState | None:
+        with self._session_factory() as session:
+            try:
+                row = session.scalar(
+                    select(TailRadarWorkflowCandidateRecord)
+                    .join(
+                        TailRadarWorkflowRecord,
+                        TailRadarWorkflowRecord.workflow_run_id
+                        == TailRadarWorkflowCandidateRecord.workflow_run_id,
+                    )
+                    .where(TailRadarWorkflowCandidateRecord.candidate_id == candidate_id)
+                    .order_by(TailRadarWorkflowRecord.created_at.desc())
+                    .limit(1)
+                )
+                return None if row is None else self._workflow_candidate_data(row)
+            except (SQLAlchemyError, ValidationError) as exc:
+                raise TailRadarPersistenceError(
+                    "Tail Radar candidate workflow state could not be read"
+                ) from exc
+
+    def set_candidate_technical_stage(
+        self,
+        *,
+        workflow_run_id: UUID,
+        candidate_id: UUID,
+        status: TailRadarCandidateStageStatus,
+        analysis_id: UUID | None = None,
+        error_code: str | None = None,
+    ) -> TailRadarWorkflowCandidateState:
+        if status is TailRadarCandidateStageStatus.NO_EVIDENCE:
+            raise TailRadarPersistenceError("technical analysis cannot use no_evidence status")
+        return self._set_candidate_stage(
+            workflow_run_id=workflow_run_id,
+            candidate_id=candidate_id,
+            stage="technical",
+            status=status,
+            linked_id=analysis_id,
+            error_code=error_code,
+        )
+
+    def set_candidate_research_stage(
+        self,
+        *,
+        workflow_run_id: UUID,
+        candidate_id: UUID,
+        status: TailRadarCandidateStageStatus,
+        research_id: UUID | None = None,
+        error_code: str | None = None,
+    ) -> TailRadarWorkflowCandidateState:
+        return self._set_candidate_stage(
+            workflow_run_id=workflow_run_id,
+            candidate_id=candidate_id,
+            stage="research",
+            status=status,
+            linked_id=research_id,
+            error_code=error_code,
+        )
+
+    def complete_workflow(
+        self, *, workflow_run_id: UUID, finished_at: datetime
+    ) -> TailRadarWorkflowData:
+        with self._session_factory() as session:
+            try:
+                run, workflow = self._locked_workflow(session, workflow_run_id)
+                self._refresh_workflow_counts(session, workflow)
+                incomplete = any(
+                    (
+                        workflow.technical_failed_count,
+                        workflow.technical_pending_count,
+                        workflow.research_failed_count,
+                        workflow.research_pending_count,
+                    )
+                )
+                workflow.lifecycle = (
+                    TailRadarWorkflowLifecycle.PARTIAL_SUCCESS.value
+                    if incomplete
+                    else TailRadarWorkflowLifecycle.SUCCEEDED.value
+                )
+                workflow.error_stage = None
+                workflow.error_code = None
+                run.status = RunStatus.SUCCEEDED
+                run.actual_finished_at = finished_at
+                run.error_code = None
+                run.error_message = None
+                run.error_details = None
+                session.flush()
+                data = self._workflow_data(run, workflow)
+            except TailRadarPersistenceError:
+                session.rollback()
+                raise
+            except SQLAlchemyError as exc:
+                session.rollback()
+                raise TailRadarPersistenceError(
+                    "Tail Radar workflow could not be completed"
+                ) from exc
+            self._commit_workflow(session, "completion")
+            return data
+
+    def fail_workflow(
+        self,
+        *,
+        workflow_run_id: UUID,
+        finished_at: datetime,
+        error_stage: str,
+        error_code: str,
+    ) -> TailRadarWorkflowData:
+        with self._session_factory() as session:
+            try:
+                run, workflow = self._locked_workflow(session, workflow_run_id)
+                self._refresh_workflow_counts(session, workflow)
+                workflow.lifecycle = TailRadarWorkflowLifecycle.FAILED.value
+                workflow.error_stage = error_stage[:64]
+                workflow.error_code = error_code[:128]
+                run.status = RunStatus.FAILED
+                run.actual_finished_at = finished_at
+                run.error_code = error_code[:128]
+                run.error_message = None
+                run.error_details = {"stage": error_stage[:64]}
+                session.flush()
+                data = self._workflow_data(run, workflow)
+            except TailRadarPersistenceError:
+                session.rollback()
+                raise
+            except SQLAlchemyError as exc:
+                session.rollback()
+                raise TailRadarPersistenceError(
+                    "Tail Radar workflow failure was not recorded"
+                ) from exc
+            self._commit_workflow(session, "failure")
+            return data
+
+    def _set_candidate_stage(
+        self,
+        *,
+        workflow_run_id: UUID,
+        candidate_id: UUID,
+        stage: str,
+        status: TailRadarCandidateStageStatus,
+        linked_id: UUID | None,
+        error_code: str | None,
+    ) -> TailRadarWorkflowCandidateState:
+        success = status in {
+            TailRadarCandidateStageStatus.SUCCEEDED,
+            TailRadarCandidateStageStatus.NO_EVIDENCE,
+        }
+        if success != (linked_id is not None):
+            raise TailRadarPersistenceError("successful candidate stage requires an artifact link")
+        if (status is TailRadarCandidateStageStatus.FAILED) != bool(error_code):
+            raise TailRadarPersistenceError("candidate failure status requires only an error code")
+        with self._session_factory() as session:
+            try:
+                workflow = session.scalar(
+                    select(TailRadarWorkflowRecord)
+                    .where(TailRadarWorkflowRecord.workflow_run_id == workflow_run_id)
+                    .with_for_update()
+                )
+                record = session.scalar(
+                    select(TailRadarWorkflowCandidateRecord)
+                    .where(
+                        TailRadarWorkflowCandidateRecord.workflow_run_id == workflow_run_id,
+                        TailRadarWorkflowCandidateRecord.candidate_id == candidate_id,
+                    )
+                    .with_for_update()
+                )
+                if workflow is None or record is None:
+                    raise TailRadarPersistenceError("workflow candidate stage was not found")
+                if success:
+                    if linked_id is None:  # guarded above, retained for type narrowing
+                        raise TailRadarPersistenceError(
+                            "successful candidate stage requires an artifact link"
+                        )
+                    self._validate_workflow_stage_link(
+                        session,
+                        workflow=workflow,
+                        candidate_id=candidate_id,
+                        stage=stage,
+                        status=status,
+                        linked_id=linked_id,
+                    )
+                if stage == "technical":
+                    record.technical_status = status.value
+                    record.intraday_analysis_id = linked_id
+                    record.technical_error_code = error_code[:128] if error_code else None
+                else:
+                    record.research_status = status.value
+                    record.research_id = linked_id
+                    record.research_error_code = error_code[:128] if error_code else None
+                session.flush()
+                self._refresh_workflow_counts(session, workflow)
+                data = self._workflow_candidate_data(record)
+            except TailRadarPersistenceError:
+                session.rollback()
+                raise
+            except (IntegrityError, SQLAlchemyError) as exc:
+                session.rollback()
+                raise TailRadarPersistenceError(
+                    "Tail Radar workflow candidate stage could not be updated"
+                ) from exc
+            self._commit_workflow(session, f"candidate {stage} stage")
+            return data
+
+    @staticmethod
+    def _validate_workflow_stage_link(
+        session: Session,
+        *,
+        workflow: TailRadarWorkflowRecord,
+        candidate_id: UUID,
+        stage: str,
+        status: TailRadarCandidateStageStatus,
+        linked_id: UUID,
+    ) -> None:
+        if workflow.screening_run_id is None or workflow.analysis_as_of is None:
+            raise TailRadarPersistenceError(
+                "workflow candidate artifacts require screening and analysis provenance"
+            )
+        if stage == "technical":
+            analysis = session.get(TailRadarIntradayAnalysisRecord, linked_id)
+            if (
+                analysis is None
+                or analysis.candidate_id != candidate_id
+                or analysis.run_id != workflow.screening_run_id
+                or analysis.snapshot_id != workflow.snapshot_id
+                or analysis.analysis_as_of != workflow.analysis_as_of
+            ):
+                raise TailRadarPersistenceError(
+                    "technical artifact does not match its workflow candidate provenance"
+                )
+            return
+        research = session.get(TailRadarResearchRecord, linked_id)
+        if (
+            research is None
+            or research.candidate_id != candidate_id
+            or research.run_id != workflow.screening_run_id
+            or research.snapshot_id != workflow.snapshot_id
+            or research.analysis_as_of != workflow.analysis_as_of
+            or research.status != status.value
+        ):
+            raise TailRadarPersistenceError(
+                "research artifact does not match its workflow candidate provenance"
+            )
+
     @staticmethod
     def _find_run_for_snapshot_rule(
         session: Session,
@@ -831,6 +1425,137 @@ class PostgresTailRadarRepository:
             )
         ).one_or_none()
         return None if row is None else row._tuple()
+
+    @staticmethod
+    def _workflow_select() -> Select[tuple[ExecutionRun, TailRadarWorkflowRecord]]:
+        return select(ExecutionRun, TailRadarWorkflowRecord).join(
+            TailRadarWorkflowRecord,
+            TailRadarWorkflowRecord.workflow_run_id == ExecutionRun.run_id,
+        )
+
+    @classmethod
+    def _find_workflow(
+        cls,
+        session: Session,
+        *,
+        intended_snapshot_time: datetime,
+        workflow_version: str,
+    ) -> tuple[ExecutionRun, TailRadarWorkflowRecord] | None:
+        row = session.execute(
+            cls._workflow_select().where(
+                ExecutionRun.job_type == TAIL_RADAR_WORKFLOW_JOB_TYPE,
+                ExecutionRun.trade_date == intended_snapshot_time.date(),
+                ExecutionRun.intended_execution_time == intended_snapshot_time,
+                ExecutionRun.implementation_version == workflow_version,
+                ExecutionRun.is_official.is_(True),
+            )
+        ).one_or_none()
+        return None if row is None else row._tuple()
+
+    @classmethod
+    def _locked_workflow(
+        cls, session: Session, workflow_run_id: UUID
+    ) -> tuple[ExecutionRun, TailRadarWorkflowRecord]:
+        row = session.execute(
+            cls._workflow_select()
+            .where(TailRadarWorkflowRecord.workflow_run_id == workflow_run_id)
+            .with_for_update()
+        ).one_or_none()
+        if row is None:
+            raise TailRadarPersistenceError("Tail Radar workflow was not found")
+        return row._tuple()
+
+    @staticmethod
+    def _refresh_workflow_counts(session: Session, workflow: TailRadarWorkflowRecord) -> None:
+        rows = session.execute(
+            select(
+                TailRadarWorkflowCandidateRecord.technical_status,
+                TailRadarWorkflowCandidateRecord.research_status,
+            ).where(TailRadarWorkflowCandidateRecord.workflow_run_id == workflow.workflow_run_id)
+        ).all()
+        technical = [row.technical_status for row in rows]
+        research = [row.research_status for row in rows]
+        workflow.candidate_count = len(rows) if workflow.screening_run_id is not None else None
+        workflow.technical_succeeded_count = technical.count(
+            TailRadarCandidateStageStatus.SUCCEEDED.value
+        )
+        workflow.technical_failed_count = technical.count(
+            TailRadarCandidateStageStatus.FAILED.value
+        )
+        workflow.technical_pending_count = len(technical) - (
+            workflow.technical_succeeded_count + workflow.technical_failed_count
+        )
+        workflow.research_succeeded_count = research.count(
+            TailRadarCandidateStageStatus.SUCCEEDED.value
+        )
+        workflow.research_no_evidence_count = research.count(
+            TailRadarCandidateStageStatus.NO_EVIDENCE.value
+        )
+        workflow.research_failed_count = research.count(TailRadarCandidateStageStatus.FAILED.value)
+        workflow.research_pending_count = len(research) - (
+            workflow.research_succeeded_count
+            + workflow.research_no_evidence_count
+            + workflow.research_failed_count
+        )
+
+    @staticmethod
+    def _workflow_data(
+        run: ExecutionRun, workflow: TailRadarWorkflowRecord
+    ) -> TailRadarWorkflowData:
+        if run.trade_date is None or run.actual_started_at is None:
+            raise TailRadarPersistenceError("Tail Radar workflow execution metadata is incomplete")
+        return TailRadarWorkflowData(
+            workflow_run_id=workflow.workflow_run_id,
+            trade_date=run.trade_date,
+            intended_snapshot_time=run.intended_execution_time,
+            analysis_as_of=workflow.analysis_as_of,
+            workflow_version=workflow.workflow_version,
+            lifecycle=TailRadarWorkflowLifecycle(workflow.lifecycle),
+            execution_status=run.status,
+            snapshot_run_id=workflow.snapshot_run_id,
+            snapshot_id=workflow.snapshot_id,
+            screening_run_id=workflow.screening_run_id,
+            candidate_count=workflow.candidate_count,
+            technical_succeeded_count=workflow.technical_succeeded_count,
+            technical_failed_count=workflow.technical_failed_count,
+            technical_pending_count=workflow.technical_pending_count,
+            research_succeeded_count=workflow.research_succeeded_count,
+            research_no_evidence_count=workflow.research_no_evidence_count,
+            research_failed_count=workflow.research_failed_count,
+            research_pending_count=workflow.research_pending_count,
+            error_stage=workflow.error_stage,
+            error_code=workflow.error_code,
+            actual_started_at=run.actual_started_at,
+            actual_finished_at=run.actual_finished_at,
+            created_at=workflow.created_at,
+            updated_at=workflow.updated_at,
+        )
+
+    @staticmethod
+    def _workflow_candidate_data(
+        record: TailRadarWorkflowCandidateRecord,
+    ) -> TailRadarWorkflowCandidateState:
+        return TailRadarWorkflowCandidateState(
+            workflow_run_id=record.workflow_run_id,
+            candidate_id=record.candidate_id,
+            technical_status=TailRadarCandidateStageStatus(record.technical_status),
+            research_status=TailRadarCandidateStageStatus(record.research_status),
+            intraday_analysis_id=record.intraday_analysis_id,
+            research_id=record.research_id,
+            technical_error_code=record.technical_error_code,
+            research_error_code=record.research_error_code,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+        )
+
+    @staticmethod
+    def _commit_workflow(session: Session, operation: str) -> None:
+        try:
+            session.commit()
+        except SQLAlchemyError as exc:
+            raise TailRadarCommitUncertainError(
+                f"Tail Radar workflow {operation} commit outcome is uncertain"
+            ) from exc
 
     @classmethod
     def _find_cached_research(
@@ -1012,7 +1737,7 @@ class PostgresTailRadarRepository:
             artifact.artifact_id != record.analysis_id
             or artifact.module != "tail_radar"
             or artifact.artifact_type != TAIL_RADAR_INTRADAY_ARTIFACT_TYPE
-            or artifact.schema_version != INTRADAY_FEATURE_SCHEMA_VERSION
+            or artifact.schema_version != payload.feature_schema_version
             or artifact.symbol != record.symbol
             or artifact.as_of != record.analysis_as_of
             or payload.calculation_version != record.calculation_version
