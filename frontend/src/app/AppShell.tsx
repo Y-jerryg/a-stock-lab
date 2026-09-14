@@ -16,7 +16,9 @@ import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 
 import { Button } from '../components/ui/button';
+import { PageErrorBoundary } from '../components/PageErrorBoundary';
 import { cn } from '../lib/utils';
+import { text } from '../locales';
 
 type Theme = 'light' | 'dark';
 
@@ -32,17 +34,18 @@ interface NavGroup {
 }
 
 const navigation: NavGroup[] = [
-  { label: 'Workspace', items: [{ label: 'Overview', path: '/', icon: Gauge }] },
+  { label: '工作台', items: [{ label: '总览', path: '/', icon: Gauge }] },
   {
-    label: 'Research',
+    label: '研究',
     items: [
-      { label: 'Tail Radar', path: '/tail-radar', icon: Radar },
-      { label: 'Intelligence', path: '/intelligence', icon: Activity },
-      { label: 'Quant Lab', path: '/quant-lab', icon: ChartNoAxesCombined },
+      { label: '尾盘雷达', path: '/tail-radar', icon: Radar },
+      { label: text.trend.nav, path: '/trend-radar', icon: ChartNoAxesCombined },
+      { label: '情报中心', path: '/intelligence', icon: Activity },
+      { label: '量化实验室', path: '/quant-lab', icon: ChartNoAxesCombined },
     ],
   },
-  { label: 'AI', items: [{ label: 'AI Research Assistant', path: '/assistant', icon: Bot }] },
-  { label: 'System', items: [{ label: 'Data Status', path: '/data-status', icon: Database }] },
+  { label: '人工智能', items: [{ label: 'AI 研究助手', path: '/assistant', icon: Bot }] },
+  { label: '系统', items: [{ label: '数据状态', path: '/data-status', icon: Database }] },
 ];
 
 function getInitialTheme(): Theme {
@@ -84,14 +87,14 @@ export function AppShell() {
         )}
       >
         <div className="flex h-16 items-center justify-between border-b border-[var(--border)] px-5">
-          <NavLink to="/" className="flex items-center gap-3" aria-label="A-Stock Lab home">
+          <NavLink to="/" className="flex items-center gap-3" aria-label="A股实验室首页">
             <div className="grid size-8 place-items-center rounded-md bg-[var(--accent)] text-sm font-bold text-white shadow-sm">
               A
             </div>
             <div>
-              <p className="text-sm font-semibold tracking-tight">A-Stock Lab</p>
+              <p className="text-sm font-semibold tracking-tight">A股实验室</p>
               <p className="text-[10px] font-medium tracking-[0.16em] text-[var(--text-muted)] uppercase">
-                Research System
+                研究系统
               </p>
             </div>
           </NavLink>
@@ -102,13 +105,13 @@ export function AppShell() {
             onClick={() => {
               setSidebarOpen(false);
             }}
-            aria-label="Close navigation"
+            aria-label="关闭导航栏"
           >
             <X className="size-4" />
           </Button>
         </div>
 
-        <nav className="flex-1 overflow-y-auto px-3 py-5" aria-label="Primary navigation">
+        <nav className="flex-1 overflow-y-auto px-3 py-5" aria-label="主导航栏">
           {navigation.map((group) => (
             <div key={group.label} className="mb-6">
               <p className="mb-2 px-3 text-[10px] font-semibold tracking-[0.14em] text-[var(--text-subtle)] uppercase">
@@ -155,11 +158,9 @@ export function AppShell() {
           <div className="rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5">
             <div className="flex items-center gap-2 text-xs font-medium">
               <span className="size-1.5 rounded-full bg-emerald-500" />
-              Foundation environment
+              基础环境
             </div>
-            <p className="mt-1 pl-3.5 text-[11px] text-[var(--text-subtle)]">
-              Tail Radar · point-in-time
-            </p>
+            <p className="mt-1 pl-3.5 text-[11px] text-[var(--text-subtle)]">尾盘雷达 · 时点快照</p>
           </div>
         </div>
       </aside>
@@ -174,16 +175,14 @@ export function AppShell() {
               onClick={() => {
                 setSidebarOpen(true);
               }}
-              aria-label="Open navigation"
+              aria-label="打开导航栏"
             >
               <Menu className="size-4" />
             </Button>
             <div>
-              <p className="text-xs font-medium text-[var(--text-muted)]">
-                A-share research workspace
-              </p>
+              <p className="text-xs font-medium text-[var(--text-muted)]">A股研究工作台</p>
               <p className="hidden text-[10px] text-[var(--text-subtle)] sm:block">
-                Canonical market time · Asia/Shanghai
+                市场标准时区 · 亚洲/上海
               </p>
             </div>
           </div>
@@ -193,13 +192,15 @@ export function AppShell() {
             onClick={() => {
               setTheme(theme === 'dark' ? 'light' : 'dark');
             }}
-            aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+            aria-label={`切换为${theme === 'dark' ? '浅色' : '深色'}主题`}
           >
             {theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}
           </Button>
         </header>
         <main className="mx-auto w-full max-w-[1600px] p-4 sm:p-6 lg:p-8">
-          <Outlet />
+          <PageErrorBoundary key={location.pathname}>
+            <Outlet />
+          </PageErrorBoundary>
         </main>
       </div>
     </div>

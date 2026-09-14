@@ -6,7 +6,7 @@ import './styles.css';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
-  throw new Error('Application root element was not found.');
+  throw new Error('未找到应用根节点。');
 }
 
 createRoot(rootElement).render(
@@ -14,3 +14,11 @@ createRoot(rootElement).render(
     <App />
   </StrictMode>,
 );
+
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  void navigator.serviceWorker
+    .register(`${import.meta.env.BASE_URL}service-worker.js`)
+    .catch(() => {
+      // The application remains usable when offline shell caching is unavailable.
+    });
+}

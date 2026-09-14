@@ -29,12 +29,12 @@ export function ReservedModule({
               <Icon className="size-5 text-[var(--accent)]" />
             </div>
             <Badge variant="reserved">
-              <LockKeyhole className="mr-1 size-3" /> Reserved module
+              <LockKeyhole className="mr-1 size-3" /> 预留模块
             </Badge>
-            <h2 className="mt-4 text-lg font-semibold">Architecture boundary established</h2>
+            <h2 className="mt-4 text-lg font-semibold">架构边界已建立</h2>
             <p className="mt-2 text-sm leading-6 text-[var(--text-muted)]">{purpose}</p>
             <p className="mt-5 text-xs text-[var(--text-subtle)]">
-              No simulated data or placeholder analysis is shown.
+              此处不会展示模拟数据或占位分析。
             </p>
           </div>
         </CardContent>

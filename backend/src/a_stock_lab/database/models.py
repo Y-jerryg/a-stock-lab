@@ -6,8 +6,16 @@ from a_stock_lab.features.tail_radar.adapters.persistence_models import (
     TailRadarResearchRecord,
     TailRadarResearchSourceRecord,
     TailRadarRunRecord,
+    TailRadarScheduleRecord,
     TailRadarWorkflowCandidateRecord,
     TailRadarWorkflowRecord,
+)
+from a_stock_lab.features.trend_radar.adapters.models import (
+    TrendBarRecord,
+    TrendHeatRecord,
+    TrendScanResultRecord,
+    TrendScanRunRecord,
+    TrendScheduleClaimRecord,
 )
 from a_stock_lab.shared.artifacts.models import ResearchArtifact
 from a_stock_lab.shared.execution.models import ExecutionRun
@@ -22,6 +30,12 @@ __all__ = [
     "TailRadarResearchRecord",
     "TailRadarResearchSourceRecord",
     "TailRadarRunRecord",
+    "TailRadarScheduleRecord",
     "TailRadarWorkflowCandidateRecord",
     "TailRadarWorkflowRecord",
+    "TrendBarRecord",
+    "TrendHeatRecord",
+    "TrendScanResultRecord",
+    "TrendScanRunRecord",
+    "TrendScheduleClaimRecord",
 ]

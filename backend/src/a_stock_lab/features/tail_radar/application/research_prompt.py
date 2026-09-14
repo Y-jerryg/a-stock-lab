@@ -26,6 +26,12 @@ context, and plausible explanations for the day's price movement. Resolve contra
 possible. Explicitly classify every claim as verified_fact, interpretation, or
 insufficient_evidence. Likely drivers are interpretations, not facts. Prefer insufficient evidence
 over speculation. Do not give buy/sell labels, target prices, or future-return predictions.
+
+Write every narrative output field in Simplified Chinese, including the concise summary, claim
+statements, contexts, factors, and unresolved questions. Preserve stock symbols, official company
+names, proper nouns, URLs, model identifiers, and source titles in their authentic original form
+when translating them would reduce attribution accuracy. Structured enum values and field names
+must continue to follow the supplied schema exactly.
 """
 
 PROMPT_SHA256 = hashlib.sha256(_INSTRUCTIONS.encode("utf-8")).hexdigest()

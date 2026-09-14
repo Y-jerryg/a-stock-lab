@@ -45,7 +45,7 @@ export function IntradayChart({ bars, symbol }: { bars: IntradayBar[]; symbol: s
       },
       series: [
         {
-          name: 'Close',
+          name: '收盘价',
           type: 'line',
           data: bars.map((bar) => bar.close),
           showSymbol: false,
@@ -67,16 +67,11 @@ export function IntradayChart({ bars, symbol }: { bars: IntradayBar[]; symbol: s
   if (bars.length === 0) {
     return (
       <div className="grid h-72 place-items-center rounded-md bg-[var(--surface-muted)] text-sm text-[var(--text-muted)]">
-        No point-in-time bar series was persisted for this analysis.
+        本次分析没有保存可用的时点分时数据序列。
       </div>
     );
   }
   return (
-    <div
-      ref={elementRef}
-      className="h-80 w-full"
-      role="img"
-      aria-label={`${symbol} intraday chart`}
-    />
+    <div ref={elementRef} className="h-80 w-full" role="img" aria-label={`${symbol} 日内分时图`} />
   );
 }

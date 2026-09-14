@@ -22,6 +22,7 @@ dependencies = [
 market-data-diagnostic = "a_stock_lab.shared.market_data.diagnostic:main"
 market-snapshot = "a_stock_lab.shared.market_data.execution_cli:main"
 tail-radar = "a_stock_lab.features.tail_radar.execution_cli:main"
+trend-radar = "a_stock_lab.features.trend_radar.cli:main"
 
 [dependency-groups]
 dev = [

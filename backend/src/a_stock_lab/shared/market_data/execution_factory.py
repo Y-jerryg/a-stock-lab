@@ -11,6 +11,7 @@ from a_stock_lab.shared.market_data.adapters.parquet import ParquetMarketSnapsho
 from a_stock_lab.shared.market_data.adapters.postgres import (
     PostgresSnapshotExecutionRepository,
 )
+from a_stock_lab.shared.market_data.contracts import MarketDataProvider, TradingCalendar
 from a_stock_lab.shared.market_data.execution_service import FullMarketSnapshotExecutionEngine
 from a_stock_lab.shared.market_data.service import FullMarketSnapshotService
 
@@ -19,14 +20,19 @@ def build_snapshot_execution_repository() -> PostgresSnapshotExecutionRepository
     return PostgresSnapshotExecutionRepository(SessionFactory)
 
 
-def build_snapshot_execution_engine(settings: Settings) -> FullMarketSnapshotExecutionEngine:
-    provider = build_market_data_provider(settings)
+def build_snapshot_execution_engine(
+    settings: Settings,
+    *,
+    provider: MarketDataProvider | None = None,
+    trading_calendar: TradingCalendar | None = None,
+) -> FullMarketSnapshotExecutionEngine:
+    selected_provider = provider or build_market_data_provider(settings)
     return FullMarketSnapshotExecutionEngine(
         snapshot_service=FullMarketSnapshotService(
-            provider=provider,
+            provider=selected_provider,
             thresholds=build_snapshot_quality_thresholds(settings),
         ),
-        trading_calendar=build_trading_calendar(),
+        trading_calendar=trading_calendar or build_trading_calendar(),
         storage=ParquetMarketSnapshotWriter(Path(settings.runtime_data_dir)),
         repository=build_snapshot_execution_repository(),
     )

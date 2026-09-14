@@ -7,33 +7,33 @@ import { PageHeader } from '../../components/PageHeader';
 
 const modules = [
   {
-    title: 'Tail Radar',
-    description: 'Point-in-time late-session A-share research workflow.',
-    status: 'Foundation ready',
+    title: '尾盘雷达',
+    description: '面向A股尾盘时点的完整研究工作流。',
+    status: '功能就绪',
     badge: 'ready' as const,
     path: '/tail-radar',
     icon: Radar,
   },
   {
-    title: 'Intelligence',
-    description: 'Daily market, company, industry, policy, and macro intelligence.',
-    status: 'Reserved',
+    title: '情报中心',
+    description: '汇总市场、公司、行业、政策和宏观层面的每日情报。',
+    status: '暂未开放',
     badge: 'reserved' as const,
     path: '/intelligence',
     icon: ScanSearch,
   },
   {
-    title: 'Quant Lab',
-    description: 'Historical data, factors, backtests, and statistical evaluation.',
-    status: 'Reserved',
+    title: '量化实验室',
+    description: '用于历史数据、因子、回测和统计评估。',
+    status: '暂未开放',
     badge: 'reserved' as const,
     path: '/quant-lab',
     icon: ChartNoAxesCombined,
   },
   {
-    title: 'AI Research Assistant',
-    description: 'Research assistant grounded in artifacts produced by this platform.',
-    status: 'Reserved',
+    title: 'AI 研究助手',
+    description: '基于本平台研究成果提供辅助分析。',
+    status: '暂未开放',
     badge: 'reserved' as const,
     path: '/assistant',
     icon: Bot,
@@ -44,9 +44,9 @@ export function OverviewPage() {
   return (
     <div>
       <PageHeader
-        eyebrow="System overview"
-        title="Research workspace"
-        description="A durable foundation for deterministic market research, structured intelligence, quantitative analysis, and artifact-grounded AI assistance."
+        eyebrow="系统总览"
+        title="研究工作台"
+        description="为确定性市场研究、结构化情报、量化分析和基于研究成果的 AI 辅助建立可持续演进的基础。"
       />
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -72,7 +72,7 @@ export function OverviewPage() {
                   to={module.path}
                   className="mt-5 inline-flex items-center gap-1.5 text-xs font-semibold text-[var(--accent)]"
                 >
-                  Open module
+                  打开模块
                   <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" />
                 </Link>
               </CardContent>
@@ -85,28 +85,17 @@ export function OverviewPage() {
         <CardHeader>
           <div className="flex items-center justify-between gap-3">
             <div>
-              <h2 className="text-sm font-semibold">Foundation principles</h2>
-              <p className="mt-1 text-xs text-[var(--text-muted)]">
-                System-wide research invariants
-              </p>
+              <h2 className="text-sm font-semibold">基础原则</h2>
+              <p className="mt-1 text-xs text-[var(--text-muted)]">全系统必须遵守的研究约束</p>
             </div>
-            <Badge>Phase 0</Badge>
+            <Badge>基础阶段</Badge>
           </div>
         </CardHeader>
         <CardContent className="grid gap-px overflow-hidden rounded-md border border-[var(--border)] bg-[var(--border)] p-0 sm:grid-cols-3">
           {[
-            [
-              'Point-in-time integrity',
-              'Historical work preserves an explicit, timezone-aware as-of boundary.',
-            ],
-            [
-              'Deterministic first',
-              'Market logic remains inspectable and separate from AI interpretation.',
-            ],
-            [
-              'Shared artifacts',
-              'Modules publish versioned structured research for downstream use.',
-            ],
+            ['时点完整性', '历史研究必须保留明确、带时区的资料截止时点。'],
+            ['确定性优先', '市场规则保持可检查，并与 AI 解释严格分离。'],
+            ['共享研究成果', '各模块发布带版本的结构化研究成果，供后续功能复用。'],
           ].map(([title, description]) => (
             <div key={title} className="bg-[var(--surface)] p-5">
               <p className="text-xs font-semibold">{title}</p>

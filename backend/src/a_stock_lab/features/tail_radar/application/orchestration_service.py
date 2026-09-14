@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from uuid import UUID
 
@@ -19,8 +20,6 @@ from a_stock_lab.features.tail_radar.application.orchestration_models import (
     TailRadarWorkflowLifecycle,
     TailRadarWorkflowResult,
 )
-from a_stock_lab.features.tail_radar.application.research_models import TailRadarResearchStatus
-from a_stock_lab.features.tail_radar.application.research_service import TailRadarResearchService
 from a_stock_lab.features.tail_radar.application.service import TailRadarScreeningService
 from a_stock_lab.features.tail_radar.domain.errors import (
     TailRadarCommitUncertainError,
@@ -42,18 +41,20 @@ class TailRadarApplicationService:
         snapshot_execution: FullMarketSnapshotExecutionEngine,
         screening: TailRadarScreeningService,
         intraday: TailRadarIntradayAnalysisService,
-        research: TailRadarResearchService,
         tail_radar_repository: TailRadarRepository,
         workflow_repository: TailRadarWorkflowRepository,
+        intraday_workers: int = 1,
         clock: Callable[[], datetime] = now_in_market_timezone,
     ) -> None:
         self._snapshot_execution = snapshot_execution
         self._screening = screening
         self._intraday = intraday
-        self._research = research
         self._tail_radar_repository = tail_radar_repository
         self._workflow_repository = workflow_repository
         self._clock = clock
+        if not 1 <= intraday_workers <= 8:
+            raise ValueError("intraday_workers must be between 1 and 8")
+        self._intraday_workers = intraday_workers
 
     def execute(
         self,
@@ -86,10 +87,7 @@ class TailRadarApplicationService:
                 disposition=TailRadarWorkflowDisposition.IDEMPOTENT_REPLAY,
                 workflow=claim.workflow,
             )
-        workflow = self._continue_workflow(
-            claim.workflow,
-            retry_failed_research=False,
-        )
+        workflow = self._continue_workflow(claim.workflow)
         return TailRadarWorkflowResult(
             disposition=TailRadarWorkflowDisposition.CREATED,
             workflow=workflow,
@@ -99,7 +97,6 @@ class TailRadarApplicationService:
         self,
         *,
         workflow_run_id: UUID,
-        retry_failed_research: bool = False,
     ) -> TailRadarWorkflowResult:
         workflow = self._workflow_repository.get_workflow(workflow_run_id)
         if workflow is None:
@@ -109,10 +106,7 @@ class TailRadarApplicationService:
                 disposition=TailRadarWorkflowDisposition.IDEMPOTENT_REPLAY,
                 workflow=workflow,
             )
-        completed = self._continue_workflow(
-            workflow,
-            retry_failed_research=retry_failed_research,
-        )
+        completed = self._continue_workflow(workflow)
         return TailRadarWorkflowResult(
             disposition=TailRadarWorkflowDisposition.RESUMED,
             workflow=completed,
@@ -121,8 +115,6 @@ class TailRadarApplicationService:
     def _continue_workflow(
         self,
         workflow: TailRadarWorkflowData,
-        *,
-        retry_failed_research: bool,
     ) -> TailRadarWorkflowData:
         stage = "snapshot"
         try:
@@ -190,7 +182,6 @@ class TailRadarApplicationService:
             self._analyze_candidates(
                 workflow=workflow,
                 candidates=candidates,
-                retry_failed_research=retry_failed_research,
             )
             return self._workflow_repository.complete_workflow(
                 workflow_run_id=workflow.workflow_run_id,
@@ -215,7 +206,6 @@ class TailRadarApplicationService:
         *,
         workflow: TailRadarWorkflowData,
         candidates: tuple[TailRadarCandidateData, ...],
-        retry_failed_research: bool,
     ) -> None:
         if workflow.analysis_as_of is None:
             raise TailRadarWorkflowError("candidate analysis requires analysis_as_of")
@@ -228,99 +218,51 @@ class TailRadarApplicationService:
         if set(states) != {candidate.candidate_id for candidate in candidates}:
             raise TailRadarWorkflowError("workflow candidate state set is incomplete")
 
-        for candidate in candidates:
-            state = states[candidate.candidate_id]
-            if state.technical_status is not TailRadarCandidateStageStatus.SUCCEEDED:
-                self._workflow_repository.set_candidate_technical_stage(
-                    workflow_run_id=workflow.workflow_run_id,
-                    candidate_id=candidate.candidate_id,
-                    status=TailRadarCandidateStageStatus.RUNNING,
-                )
-                try:
-                    intraday_result = self._intraday.execute(
-                        candidate_id=candidate.candidate_id,
-                        analysis_as_of=workflow.analysis_as_of,
-                    )
-                except Exception as exc:
-                    if isinstance(exc, TailRadarCommitUncertainError):
-                        raise
-                    self._workflow_repository.set_candidate_technical_stage(
-                        workflow_run_id=workflow.workflow_run_id,
-                        candidate_id=candidate.candidate_id,
-                        status=TailRadarCandidateStageStatus.FAILED,
-                        error_code=_error_code(exc),
-                    )
-                else:
-                    self._workflow_repository.set_candidate_technical_stage(
-                        workflow_run_id=workflow.workflow_run_id,
-                        candidate_id=candidate.candidate_id,
-                        status=TailRadarCandidateStageStatus.SUCCEEDED,
-                        analysis_id=intraday_result.analysis.analysis_id,
-                    )
-
-        states = {
-            state.candidate_id: state
-            for state in self._workflow_repository.list_workflow_candidate_states(
-                workflow.workflow_run_id
-            )
-        }
-        for candidate in candidates:
-            state = states[candidate.candidate_id]
-            if state.research_status in {
-                TailRadarCandidateStageStatus.SUCCEEDED,
-                TailRadarCandidateStageStatus.NO_EVIDENCE,
-            }:
-                continue
-            if (
-                state.research_status is TailRadarCandidateStageStatus.FAILED
-                and not retry_failed_research
-            ):
-                continue
-            force = (
-                retry_failed_research
-                and state.research_status is TailRadarCandidateStageStatus.FAILED
-            )
-            self._workflow_repository.set_candidate_research_stage(
-                workflow_run_id=workflow.workflow_run_id,
-                candidate_id=candidate.candidate_id,
-                status=TailRadarCandidateStageStatus.RUNNING,
-            )
+        with ThreadPoolExecutor(max_workers=self._intraday_workers) as executor:
+            futures = [
+                executor.submit(self._analyze_candidate, workflow, candidate)
+                for candidate in candidates
+                if states[candidate.candidate_id].technical_status
+                is not TailRadarCandidateStageStatus.SUCCEEDED
+            ]
             try:
-                research_result = self._research.execute(
-                    candidate_id=candidate.candidate_id,
-                    analysis_as_of=workflow.analysis_as_of,
-                    force=force,
-                )
-            except Exception as exc:
-                if isinstance(exc, TailRadarCommitUncertainError):
-                    raise
-                self._workflow_repository.set_candidate_research_stage(
-                    workflow_run_id=workflow.workflow_run_id,
-                    candidate_id=candidate.candidate_id,
-                    status=TailRadarCandidateStageStatus.FAILED,
-                    error_code=_error_code(exc),
-                )
-                continue
-            research = research_result.research
-            if research.status is TailRadarResearchStatus.SUCCEEDED:
-                status = TailRadarCandidateStageStatus.SUCCEEDED
-            elif research.status is TailRadarResearchStatus.NO_EVIDENCE:
-                status = TailRadarCandidateStageStatus.NO_EVIDENCE
-            elif research.status is TailRadarResearchStatus.FAILED:
-                self._workflow_repository.set_candidate_research_stage(
-                    workflow_run_id=workflow.workflow_run_id,
-                    candidate_id=candidate.candidate_id,
-                    status=TailRadarCandidateStageStatus.FAILED,
-                    error_code=research.error_code or "research_failed",
-                )
-                continue
-            else:
-                continue
-            self._workflow_repository.set_candidate_research_stage(
+                for future in futures:
+                    future.result()
+            except Exception:
+                for future in futures:
+                    future.cancel()
+                raise
+
+    def _analyze_candidate(
+        self, workflow: TailRadarWorkflowData, candidate: TailRadarCandidateData
+    ) -> None:
+        if workflow.analysis_as_of is None:
+            raise TailRadarWorkflowError("candidate analysis requires analysis_as_of")
+        self._workflow_repository.set_candidate_technical_stage(
+            workflow_run_id=workflow.workflow_run_id,
+            candidate_id=candidate.candidate_id,
+            status=TailRadarCandidateStageStatus.RUNNING,
+        )
+        try:
+            intraday_result = self._intraday.execute(
+                candidate_id=candidate.candidate_id,
+                analysis_as_of=workflow.analysis_as_of,
+            )
+        except TailRadarCommitUncertainError:
+            raise
+        except Exception as exc:
+            self._workflow_repository.set_candidate_technical_stage(
                 workflow_run_id=workflow.workflow_run_id,
                 candidate_id=candidate.candidate_id,
-                status=status,
-                research_id=research.research_id,
+                status=TailRadarCandidateStageStatus.FAILED,
+                error_code=_error_code(exc),
+            )
+        else:
+            self._workflow_repository.set_candidate_technical_stage(
+                workflow_run_id=workflow.workflow_run_id,
+                candidate_id=candidate.candidate_id,
+                status=TailRadarCandidateStageStatus.SUCCEEDED,
+                analysis_id=intraday_result.analysis.analysis_id,
             )
 
     def _all_candidates(self, run_id: UUID) -> tuple[TailRadarCandidateData, ...]:

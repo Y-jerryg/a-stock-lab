@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, vi } from 'vitest';
 
 import { App } from './App';
@@ -26,10 +26,8 @@ describe('Tail Radar navigation', () => {
     );
     render(<App />);
 
-    expect(
-      await screen.findByRole('heading', { name: 'Tail Radar', level: 1 }),
-    ).toBeInTheDocument();
-    expect(await screen.findByText('No persisted Tail Radar run')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '尾盘雷达', level: 1 })).toBeInTheDocument();
+    expect(await screen.findByText('尚无尾盘雷达运行记录')).toBeInTheDocument();
     expect(screen.queryByText(/stock price/i)).not.toBeInTheDocument();
   });
 
@@ -55,8 +53,8 @@ describe('Tail Radar navigation', () => {
         run,
         workflow: {
           workflow_run_id: '33333333-3333-4333-8333-333333333333',
-          workflow_version: 'tail-radar-workflow-v1',
-          lifecycle: 'partial_success',
+          workflow_version: 'tail-radar-workflow-v2',
+          lifecycle: 'succeeded',
           execution_status: 'succeeded',
           analysis_as_of: '2026-08-28T14:35:00+08:00',
           candidate_count: 1,
@@ -65,8 +63,8 @@ describe('Tail Radar navigation', () => {
           technical_pending_count: 0,
           research_succeeded_count: 0,
           research_no_evidence_count: 0,
-          research_failed_count: 1,
-          research_pending_count: 0,
+          research_failed_count: 0,
+          research_pending_count: 1,
           error_stage: null,
           error_code: null,
           actual_started_at: '2026-08-28T14:30:00+08:00',
@@ -96,12 +94,16 @@ describe('Tail Radar navigation', () => {
           run_id: run.run_id,
           snapshot_id: run.snapshot_id,
           symbol: '600000',
-          exchange: 'shanghai',
+          exchange: 'SSE',
+          board: 'shanghai_main',
           name: '浦发银行',
           price: 10.25,
           pct_change: 2.5,
           amount: 100000000,
           turnover_rate: 1.2,
+          amplitude: 3.1,
+          volume_ratio: 1.4,
+          float_market_cap: 10000000000,
           as_of: '2026-08-28T14:30:03+08:00',
           screening_rule_version: 'tail-radar-screen-v1',
           intraday_position: 0.75,
@@ -110,7 +112,7 @@ describe('Tail Radar navigation', () => {
           previous_15m_return_pct: 0.3,
           previous_30m_return_pct: 0.5,
           technical_status: 'succeeded',
-          research_status: 'failed',
+          research_status: 'pending',
         },
       ],
       total: 1,
@@ -137,10 +139,14 @@ describe('Tail Radar navigation', () => {
 
     expect(await screen.findByText('浦发银行')).toBeInTheDocument();
     expect(screen.getByText('5,000')).toBeInTheDocument();
-    expect(screen.getByText('partial success')).toBeInTheDocument();
+    expect(screen.getAllByText('已完成').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('沪市主板').length).toBeGreaterThan(1);
     expect(screen.getByRole('link', { name: '600000' })).toHaveAttribute(
       'href',
       '#/tail-radar/candidates/55555555-5555-4555-8555-555555555555',
     );
+    fireEvent.change(screen.getByLabelText('上市板块'), { target: { value: 'star' } });
+    expect(screen.queryByRole('link', { name: '600000' })).not.toBeInTheDocument();
+    expect(screen.getByText('没有符合当前条件的候选标的')).toBeInTheDocument();
   });
 });

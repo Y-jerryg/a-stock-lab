@@ -7,11 +7,13 @@ import { PageHeader } from '../../components/PageHeader';
 import { Button } from '../../components/ui/button';
 import { Card, CardContent, CardHeader } from '../../components/ui/card';
 import { ApiError } from '../../lib/api/client';
-import type { StageStatus, TailRadarCandidateSummary } from './api';
+import type { AShareBoard, StageStatus, TailRadarCandidateSummary } from './api';
 import { EmptyPanel, ErrorPanel, Metric, StageBadge, WorkflowBadge } from './components';
 import {
   formatCompactMoney,
+  formatBoard,
   formatInteger,
+  formatIntradayPosition,
   formatNumber,
   formatPercent,
   formatShanghaiTime,
@@ -36,6 +38,7 @@ export function TailRadarPage() {
   const [descending, setDescending] = useState(true);
   const [technicalFilter, setTechnicalFilter] = useState<StageStatus | 'all'>('all');
   const [researchFilter, setResearchFilter] = useState<StageStatus | 'all'>('all');
+  const [boardFilter, setBoardFilter] = useState<AShareBoard | 'all'>('all');
   const [density, setDensity] = useState<Density>('compact');
   const [page, setPage] = useState(1);
   const pageSize = density === 'compact' ? 25 : 15;
@@ -49,16 +52,17 @@ export function TailRadarPage() {
         (candidate.name?.toLocaleLowerCase().includes(needle) ?? false);
       return (
         matchesSearch &&
+        (boardFilter === 'all' || candidate.board === boardFilter) &&
         (technicalFilter === 'all' || candidate.technical_status === technicalFilter) &&
         (researchFilter === 'all' || candidate.research_status === researchFilter)
       );
     });
     return values.sort((left, right) => compareCandidate(left, right, sortKey, descending));
-  }, [candidates.data, descending, researchFilter, search, sortKey, technicalFilter]);
+  }, [boardFilter, candidates.data, descending, researchFilter, search, sortKey, technicalFilter]);
 
   useEffect(() => {
     setPage(1);
-  }, [search, technicalFilter, researchFilter, density]);
+  }, [search, boardFilter, technicalFilter, researchFilter, density]);
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
   const visible = filtered.slice((page - 1) * pageSize, page * pageSize);
 
@@ -68,8 +72,8 @@ export function TailRadarPage() {
       <div>
         <Header />
         <EmptyPanel
-          title="No persisted Tail Radar run"
-          description="The public interface is read-only. Run the internal workflow CLI before expecting market results here."
+          title="尚无尾盘雷达运行记录"
+          description="公共网页仅提供只读查询。请先通过内部命令执行工作流，随后才能在这里看到真实市场结果。"
         />
       </div>
     );
@@ -78,7 +82,7 @@ export function TailRadarPage() {
   if (summary.isLoading || candidates.isLoading) return <OverviewSkeleton />;
   if (summary.isError) return <PageError error={summary.error} />;
   if (candidates.isError) return <PageError error={candidates.error} />;
-  if (!summary.data) return <PageError error={new Error('Run summary was empty.')} />;
+  if (!summary.data) return <PageError error={new Error('运行摘要为空。')} />;
 
   const run = summary.data.run;
   const snapshot = summary.data.snapshot;
@@ -88,79 +92,81 @@ export function TailRadarPage() {
     <div>
       <Header />
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
-        <Metric label="Trade date" value={run.trade_date} hint="Asia/Shanghai" />
+        <Metric label="交易日期" value={run.trade_date} hint="亚洲/上海时区" />
         <Metric
-          label="Intended snapshot"
+          label="计划快照时点"
           value={formatShanghaiTime(run.intended_snapshot_time).split(' ').at(-1)}
           hint={formatShanghaiTime(run.intended_snapshot_time)}
         />
         <Metric
-          label="Actual fetch"
+          label="实际采集完成"
           value={formatShanghaiTime(snapshot.actual_fetch_finished_at).split(' ').at(-1)}
           hint={formatShanghaiTime(snapshot.actual_fetch_finished_at)}
         />
         <Metric
-          label="Provider"
+          label="数据供应商"
           value={snapshot.provider}
-          hint={snapshot.provider_version ?? 'Version unavailable'}
+          hint={snapshot.provider_version ?? '版本信息不可用'}
         />
         <Metric
-          label="Latency"
-          value={`${formatNumber(snapshot.latency_ms, 0)} ms`}
-          hint="Full-market request"
+          label="采集延迟"
+          value={`${formatNumber(snapshot.latency_ms, 0)} 毫秒`}
+          hint="全市场请求"
         />
+        <Metric label="扫描数量" value={formatInteger(snapshot.row_count)} hint="已标准化证券" />
         <Metric
-          label="Scanned"
-          value={formatInteger(snapshot.row_count)}
-          hint="Normalized securities"
-        />
-        <Metric
-          label="Candidates"
+          label="候选数量"
           value={formatInteger(run.candidate_count)}
-          hint="Inclusive +2.00% to +3.00%"
+          hint="涨幅含边界 +2.00% 至 +3.00%"
         />
         <Metric
-          label="Workflow"
+          label="工作流状态"
           value={<WorkflowBadge status={workflow?.lifecycle} />}
-          hint={snapshot.quality_report.passed ? 'Quality gate passed' : 'Quality gate failed'}
+          hint={snapshot.quality_report.passed ? '数据质量校验通过' : '数据质量校验未通过'}
         />
       </div>
 
       <Card className="mt-5 overflow-hidden">
         <CardHeader className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
           <div>
-            <h2 className="text-sm font-semibold">Point-in-time candidates</h2>
+            <h2 className="text-sm font-semibold">时点候选标的</h2>
             <p className="mt-1 text-xs text-[var(--text-muted)]">
-              {String(filtered.length)} visible of {String(candidates.data?.length ?? 0)} persisted
-              candidates
+              已显示 {String(filtered.length)} 个，共保存 {String(candidates.data?.length ?? 0)}{' '}
+              个候选标的
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <label className="relative min-w-56 flex-1 xl:flex-none">
-              <span className="sr-only">Search candidates</span>
+              <span className="sr-only">搜索候选标的</span>
               <Search className="pointer-events-none absolute top-2.5 left-3 size-3.5 text-[var(--text-subtle)]" />
               <input
                 value={search}
                 onChange={(event) => {
                   setSearch(event.target.value);
                 }}
-                placeholder="Symbol or company"
+                placeholder="股票代码或公司名称"
                 className="h-9 w-full rounded-md border border-[var(--border-strong)] bg-[var(--surface)] pr-3 pl-9 text-sm outline-none focus:ring-2 focus:ring-[var(--focus)]"
               />
             </label>
             <SelectControl
-              label="Technical status"
+              label="上市板块"
+              value={boardFilter}
+              onChange={setBoardFilter}
+              options={BOARD_OPTIONS}
+            />
+            <SelectControl
+              label="技术分析状态"
               value={technicalFilter}
               onChange={setTechnicalFilter}
             />
             <SelectControl
-              label="AI status"
+              label="AI 研究状态"
               value={researchFilter}
               onChange={setResearchFilter}
               includeNoEvidence
             />
             <label className="sr-only" htmlFor="candidate-sort">
-              Sort candidates
+              候选标的排序
             </label>
             <select
               id="candidate-sort"
@@ -170,12 +176,12 @@ export function TailRadarPage() {
               }}
               className="h-9 rounded-md border border-[var(--border-strong)] bg-[var(--surface)] px-3 text-xs"
             >
-              <option value="pct_change">% change</option>
-              <option value="symbol">Symbol</option>
-              <option value="price">Price</option>
-              <option value="amount">Turnover amount</option>
-              <option value="intraday_position">Intraday position</option>
-              <option value="previous_5m_return_pct">5m return</option>
+              <option value="pct_change">涨跌幅</option>
+              <option value="symbol">股票代码</option>
+              <option value="price">价格</option>
+              <option value="amount">成交额</option>
+              <option value="intraday_position">日内位置</option>
+              <option value="previous_5m_return_pct">近5分钟收益率</option>
             </select>
             <Button
               variant="outline"
@@ -183,9 +189,9 @@ export function TailRadarPage() {
               onClick={() => {
                 setDescending((value) => !value);
               }}
-              aria-label={`Sort ${descending ? 'ascending' : 'descending'}`}
+              aria-label={`切换为${descending ? '升序' : '降序'}排列`}
             >
-              {descending ? '↓ Desc' : '↑ Asc'}
+              {descending ? '↓ 降序' : '↑ 升序'}
             </Button>
             <Button
               variant="outline"
@@ -194,7 +200,8 @@ export function TailRadarPage() {
                 setDensity((value) => (value === 'compact' ? 'comfortable' : 'compact'));
               }}
             >
-              <SlidersHorizontal className="size-3.5" /> {density}
+              <SlidersHorizontal className="size-3.5" />
+              {density === 'compact' ? '紧凑' : '舒适'}
             </Button>
           </div>
         </CardHeader>
@@ -202,8 +209,8 @@ export function TailRadarPage() {
           {visible.length === 0 ? (
             <div className="p-5">
               <EmptyPanel
-                title="No candidates match these controls"
-                description="Clear the search or status filters. Missing values are never synthesized."
+                title="没有符合当前条件的候选标的"
+                description="请清除搜索内容或状态筛选。系统不会为缺失字段编造数值。"
               />
             </div>
           ) : (
@@ -211,7 +218,7 @@ export function TailRadarPage() {
           )}
           <div className="flex items-center justify-between border-t border-[var(--border)] px-4 py-3 text-xs text-[var(--text-muted)]">
             <span>
-              Page {String(page)} of {String(pageCount)}
+              第 {String(page)} 页，共 {String(pageCount)} 页
             </span>
             <div className="flex gap-2">
               <Button
@@ -221,7 +228,7 @@ export function TailRadarPage() {
                 onClick={() => {
                   setPage((value) => value - 1);
                 }}
-                aria-label="Previous page"
+                aria-label="上一页"
               >
                 <ChevronLeft className="size-4" />
               </Button>
@@ -232,7 +239,7 @@ export function TailRadarPage() {
                 onClick={() => {
                   setPage((value) => value + 1);
                 }}
-                aria-label="Next page"
+                aria-label="下一页"
               >
                 <ChevronRight className="size-4" />
               </Button>
@@ -247,9 +254,9 @@ export function TailRadarPage() {
 function Header() {
   return (
     <PageHeader
-      eyebrow="Research / Tail Radar"
-      title="Tail Radar"
-      description="Official point-in-time market evidence, deterministic analysis, and separately identified AI research."
+      eyebrow="研究 / 尾盘雷达"
+      title="尾盘雷达"
+      description="展示官方时点市场证据、确定性分析，以及与市场事实明确分离的 AI 研究。"
     />
   );
 }
@@ -263,22 +270,26 @@ function CandidateTable({
 }) {
   const cellPadding = density === 'compact' ? 'py-2.5' : 'py-4';
   const headers = [
-    'Security',
-    '% change',
-    'Price',
-    'Amount',
-    'Turnover',
-    'Position',
-    'From high',
-    '5m',
-    '15m',
-    '30m',
-    'Technical',
-    'AI research',
+    '证券',
+    '上市板块',
+    '涨跌幅',
+    '价格',
+    '成交额',
+    '换手率',
+    '量比',
+    '振幅',
+    '流通市值',
+    '日内位置',
+    '距最高点',
+    '近5分钟',
+    '近15分钟',
+    '近30分钟',
+    '技术分析',
+    'AI 研究',
   ];
   return (
     <div className="max-h-[660px] overflow-auto">
-      <table className="w-full min-w-[1320px] border-collapse text-left text-xs">
+      <table className="w-full min-w-[1640px] border-collapse text-left text-xs">
         <thead className="sticky top-0 z-10 bg-[var(--surface-muted)] text-[10px] tracking-wide text-[var(--text-subtle)] uppercase">
           <tr>
             {headers.map((label) => (
@@ -302,9 +313,10 @@ function CandidateTable({
                   {candidate.symbol}
                 </Link>
                 <div className="mt-0.5 max-w-40 truncate text-[11px] text-[var(--text-muted)]">
-                  {candidate.name ?? 'Name unavailable'}
+                  {candidate.name ?? '名称不可用'}
                 </div>
               </td>
+              <td className={`px-4 ${cellPadding}`}>{formatBoard(candidate.board)}</td>
               <NumericCell value={formatPercent(candidate.pct_change)} positive />
               <NumericCell value={formatNumber(candidate.price)} />
               <NumericCell value={formatCompactMoney(candidate.amount)} />
@@ -315,13 +327,12 @@ function CandidateTable({
                     : `${formatNumber(candidate.turnover_rate)}%`
                 }
               />
+              <NumericCell value={formatNumber(candidate.volume_ratio)} />
               <NumericCell
-                value={
-                  candidate.intraday_position == null
-                    ? '—'
-                    : formatNumber(candidate.intraday_position)
-                }
+                value={candidate.amplitude == null ? '—' : `${formatNumber(candidate.amplitude)}%`}
               />
+              <NumericCell value={formatCompactMoney(candidate.float_market_cap)} />
+              <NumericCell value={formatIntradayPosition(candidate.intraday_position)} />
               <NumericCell value={formatPercent(candidate.distance_from_high_pct)} />
               <NumericCell value={formatPercent(candidate.previous_5m_return_pct)} />
               <NumericCell value={formatPercent(candidate.previous_15m_return_pct)} />
@@ -348,16 +359,18 @@ function NumericCell({ value, positive = false }: { value: string; positive?: bo
   );
 }
 
-function SelectControl({
+function SelectControl<T extends string>({
   label,
   value,
   onChange,
   includeNoEvidence = false,
+  options,
 }: {
   label: string;
-  value: StageStatus | 'all';
-  onChange: (value: StageStatus | 'all') => void;
+  value: T | 'all';
+  onChange: (value: T | 'all') => void;
   includeNoEvidence?: boolean;
+  options?: readonly { value: string; label: string }[];
 }) {
   return (
     <label>
@@ -365,20 +378,38 @@ function SelectControl({
       <select
         value={value}
         onChange={(event) => {
-          onChange(event.target.value as StageStatus | 'all');
+          onChange(event.target.value as T | 'all');
         }}
         className="h-9 rounded-md border border-[var(--border-strong)] bg-[var(--surface)] px-3 text-xs"
       >
-        <option value="all">{label}: all</option>
-        <option value="pending">Pending</option>
-        <option value="running">Running</option>
-        <option value="succeeded">Succeeded</option>
-        {includeNoEvidence ? <option value="no_evidence">No evidence</option> : null}
-        <option value="failed">Failed</option>
+        <option value="all">{label}：全部</option>
+        {options ? (
+          options.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))
+        ) : (
+          <>
+            <option value="pending">待处理</option>
+            <option value="running">进行中</option>
+            <option value="succeeded">已完成</option>
+            {includeNoEvidence ? <option value="no_evidence">无有效证据</option> : null}
+            <option value="failed">失败</option>
+          </>
+        )}
       </select>
     </label>
   );
 }
+
+const BOARD_OPTIONS = [
+  { value: 'shanghai_main', label: '沪市主板' },
+  { value: 'shenzhen_main', label: '深市主板' },
+  { value: 'chinext', label: '创业板' },
+  { value: 'star', label: '科创板' },
+  { value: 'beijing', label: '北交所' },
+] as const;
 
 function compareCandidate(
   left: TailRadarCandidateSummary,
@@ -401,7 +432,7 @@ function compareCandidate(
 
 function OverviewSkeleton() {
   return (
-    <div role="status" aria-label="Loading Tail Radar overview">
+    <div role="status" aria-label="正在加载尾盘雷达总览">
       <Header />
       <div className="grid animate-pulse gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
         {Array.from({ length: 8 }, (_, index) => (
@@ -417,7 +448,7 @@ function PageError({ error }: { error: unknown }) {
   return (
     <div>
       <Header />
-      <ErrorPanel message={error instanceof Error ? error.message : 'Unexpected API error.'} />
+      <ErrorPanel message={error instanceof Error ? error.message : '发生了未预期的接口错误。'} />
     </div>
   );
 }

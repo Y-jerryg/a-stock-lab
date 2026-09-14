@@ -1,16 +1,22 @@
+import json
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, cast
 
 import httpx
 import pytest
-from openai import APIStatusError, APITimeoutError, OpenAI
+from openai import APIStatusError, APITimeoutError, AuthenticationError, OpenAI
 
 from a_stock_lab.core.time import MARKET_TIME_ZONE
-from a_stock_lab.features.tail_radar.adapters.openai_research import OpenAIResearchProvider
+from a_stock_lab.features.tail_radar.adapters.openai_research import (
+    OpenAIResearchProvider,
+    _OpenAIResearchOutput,
+    _safe_openai_error_metadata,
+)
 from a_stock_lab.features.tail_radar.application.research_models import ResearchProviderRequest
 from a_stock_lab.features.tail_radar.domain.errors import (
     ResearchProviderAPIError,
+    ResearchProviderAuthenticationError,
     ResearchProviderInvalidResponseError,
     ResearchProviderTimeoutError,
     ResearchProviderUnavailableError,
@@ -27,6 +33,66 @@ from a_stock_lab.features.tail_radar.domain.research import (
 AS_OF = datetime(2026, 8, 28, 14, 35, tzinfo=MARKET_TIME_ZONE)
 RETRIEVED = datetime(2026, 8, 30, 10, 0, tzinfo=MARKET_TIME_ZONE)
 SOURCE_URL = "https://example.test/announcement"
+
+
+def test_error_metadata_handles_the_sdk_unwrapped_body() -> None:
+    error = {"code": "invalid_json_schema", "param": "text.format.schema", "message": "secret"}
+    assert _safe_openai_error_metadata(error) == ("invalid_json_schema", "text.format.schema")
+    assert _safe_openai_error_metadata({"error": error}) == (
+        "invalid_json_schema",
+        "text.format.schema",
+    )
+
+
+def test_real_sdk_serializes_user_key_and_parses_structured_research_without_network() -> None:
+    calls: list[dict[str, Any]] = []
+
+    def handle(http_request: httpx.Request) -> httpx.Response:
+        assert http_request.headers["authorization"] == "Bearer user-test-key"
+        payload = json.loads(http_request.content)
+        calls.append(payload)
+        assert payload["text"]["format"]["type"] == "json_schema"
+        assert payload["text"]["format"]["strict"] is True
+        assert payload["store"] is False
+        assert "user-test-key" not in http_request.content.decode()
+        raw = FakeResponse().model_dump(mode="json")
+        raw["output"][0].update(id="search_test")
+        raw["output"][1].update(id="msg_test", role="assistant", status="completed")
+        raw["output"][1]["content"][0].update(text=provider_output().model_dump_json(), logprobs=[])
+        raw["output"][1]["content"][0]["annotations"][0].update(start_index=0, end_index=1)
+        return httpx.Response(
+            200,
+            json={
+                **raw,
+                "id": "resp_test",
+                "object": "response",
+                "created_at": 1,
+                "status": "completed",
+                "model": "gpt-test",
+                "parallel_tool_calls": False,
+                "tool_choice": "required",
+                "tools": payload["tools"],
+            },
+        )
+
+    with OpenAI(
+        api_key="user-test-key",
+        max_retries=0,
+        http_client=httpx.Client(transport=httpx.MockTransport(handle)),
+    ) as client:
+        result = OpenAIResearchProvider(
+            api_key="user-test-key",
+            model="gpt-test",
+            timeout_seconds=30,
+            max_output_tokens=2000,
+            max_web_search_calls=4,
+            search_context_size="medium",
+            client=client,
+            clock=lambda: RETRIEVED,
+        ).research(request())
+    assert len(calls) == 1
+    assert tuple(map(str, result.output.verified_facts[0].source_urls)) == (SOURCE_URL,)
+    assert str(result.sources[0].url) == SOURCE_URL
 
 
 def provider_output() -> TailRadarResearchProviderOutput:
@@ -155,11 +221,37 @@ def test_openai_adapter_uses_responses_web_search_and_returns_real_sources() -> 
     assert client.responses.kwargs["tool_choice"] == "required"
     assert client.responses.kwargs["include"] == ["web_search_call.action.sources"]
     assert client.responses.kwargs["store"] is False
-    assert client.responses.kwargs["text_format"] is TailRadarResearchProviderOutput
+    assert client.responses.kwargs["text_format"] is _OpenAIResearchOutput
     assert result.actual_model == "gpt-test-snapshot"
     assert result.response_id == "resp_test"
     assert result.sources[0].title == "Company announcement"
     assert result.token_usage.total_tokens == 150
+
+
+def test_openai_wire_schema_avoids_unsupported_validation_keywords() -> None:
+    schema = _OpenAIResearchOutput.model_json_schema()
+    unsupported = {
+        "exclusiveMaximum",
+        "exclusiveMinimum",
+        "format",
+        "maxLength",
+        "maximum",
+        "minLength",
+        "minimum",
+        "multipleOf",
+        "pattern",
+    }
+
+    def find_keywords(value: object) -> set[str]:
+        if isinstance(value, dict):
+            return (set(value) & unsupported) | {
+                keyword for child in value.values() for keyword in find_keywords(child)
+            }
+        if isinstance(value, list):
+            return {keyword for child in value for keyword in find_keywords(child)}
+        return set()
+
+    assert find_keywords(schema) == set()
 
 
 def test_openai_adapter_maps_timeout_without_a_retry_or_live_call() -> None:
@@ -200,6 +292,29 @@ def test_openai_adapter_maps_non_retryable_api_error_without_exposing_response_b
         provider.research(request())
 
     assert "sensitive" not in str(captured.value)
+
+
+def test_openai_adapter_maps_rejected_user_key_without_exposing_upstream_detail() -> None:
+    http_request = httpx.Request("POST", "https://api.openai.com/v1/responses")
+    error = AuthenticationError(
+        "secret upstream authentication detail",
+        response=httpx.Response(401, request=http_request),
+        body={"error": "secret upstream authentication detail"},
+    )
+    provider = OpenAIResearchProvider(
+        api_key="test-key",
+        model="gpt-test",
+        timeout_seconds=30,
+        max_output_tokens=2_000,
+        max_web_search_calls=4,
+        search_context_size="low",
+        client=cast(OpenAI, FakeClient(error)),
+    )
+
+    with pytest.raises(ResearchProviderAuthenticationError, match="key was rejected") as captured:
+        provider.research(request())
+
+    assert "secret" not in str(captured.value)
 
 
 def test_openai_adapter_maps_server_and_malformed_response_failures() -> None:

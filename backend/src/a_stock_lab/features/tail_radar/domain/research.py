@@ -14,7 +14,7 @@ from pydantic import (
 
 from a_stock_lab.core.time import as_market_timezone
 
-TAIL_RADAR_RESEARCH_PROMPT_VERSION = "tail-radar-research-v1"
+TAIL_RADAR_RESEARCH_PROMPT_VERSION = "tail-radar-research-v2"
 TAIL_RADAR_RESEARCH_SCHEMA_VERSION = 1
 
 

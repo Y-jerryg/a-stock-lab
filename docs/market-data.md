@@ -4,8 +4,9 @@ Phase 1 implements the provider boundary and full-market snapshot ingestion infr
 adds manual point-in-time execution, a provider-neutral trading calendar, Parquet checksums, and
 PostgreSQL run/manifest persistence. Phase 3 consumes verified official snapshots for deterministic
 Tail Radar screening. Phase 4 adds provider-neutral unadjusted five-minute bars for explicit
-candidate analysis. Recurring scheduling, bulk intraday persistence, daily history, and
-security-master ingestion remain unimplemented.
+candidate analysis. Bulk intraday persistence, daily history, and security-master ingestion remain
+unimplemented. Phase 8 adds recurring execution as a separate scheduled consumer of the existing
+snapshot and calendar contracts; it does not change provider normalization.
 
 ## Dependency boundary
 
@@ -23,6 +24,15 @@ This implements the existing decision in [ADR 0004](adr/0004-provider-interfaces
 The adapter calls AKShare's documented `stock_zh_a_spot_em` interface, which returns the full
 Shanghai, Shenzhen, and Beijing A-share snapshot in one logical operation. The current upstream
 schema is documented by [AKShare](https://akshare.akfamily.xyz/data/stock/stock.html#id3).
+If that public SDK call terminates with a network/connection error, the adapter makes one logical
+fallback attempt through Eastmoney's `push2delay` host. This fallback stays inside the AKShare
+adapter, uses the same provider field mapping, spaces pages by 0.5 seconds, and rejects the response
+unless the collected row count exactly matches the first page's advertised total. Schema and data
+quality failures do not activate the fallback. The selected transport is recorded in provider
+metadata as either `akshare_public_sdk` or `eastmoney_delayed_endpoint_fallback`; domain and feature
+code remain unaware of both. This addresses the upstream empty-response behavior documented in
+[AKShare issue 7230](https://github.com/akfamily/akshare/issues/7230) without weakening the official
+snapshot quality gate.
 
 ## Normalized snapshot
 
@@ -122,9 +132,10 @@ missing inside authoritative coverage are closed, including weekday holidays; a 
 is never treated as sufficient. Requests outside authoritative coverage fail rather than guessing.
 The fetched calendar is cached for the life of one command invocation.
 
-The current AKShare calendar function does not expose a request-timeout parameter. Phase 2 keeps the
-operation manual and maps terminal SDK/network failures, but a provider with a controllable timeout
-is still required before this adapter is used by unattended scheduling.
+The current AKShare calendar function does not expose a request-timeout parameter. The Phase 8
+worker maps terminal SDK/network failures and remains live for later polling, but the lack of a
+controllable upstream timeout is an explicit controlled-production risk. A provider with bounded
+calendar latency is still preferred before unattended execution is treated as highly available.
 
 ## Point-in-time execution and manifests
 
@@ -162,7 +173,8 @@ uv run market-snapshot inspect --snapshot-id <snapshot-uuid>
 
 The explicit timestamp must include an offset, may not be later than execution start, and must fall
 on the actual Shanghai execution date. The live full-market feed cannot honestly backfill an earlier
-date. These are manual operational commands; no scheduler or public execution API exists.
+date. These remain manual operational commands. The separate worker owns recurring execution; no
+public execution API exists.
 
 Phase 3's separate `tail-radar` command reads one registered Parquet artifact by snapshot UUID,
 verifies its checksum and embedded manifest, and makes no provider or network request. See
@@ -175,6 +187,19 @@ no price adjustment. Provider timestamps are interpreted as completed bar ends i
 `Asia/Shanghai`. The adapter maps Chinese columns into normalized OHLC, volume, and amount fields;
 AKShare documents volume in lots, so the adapter converts it to shares while retaining amount in
 RMB. See the [official AKShare stock-data documentation](https://akshare.akfamily.xyz/data/stock/stock.html).
+
+Eastmoney can intermittently close the HTTPS connection when many candidate symbols are requested.
+On an SDK connection failure, the same AKShare adapter makes one bounded HTTPS fallback request to
+Sina's recent five-minute feed with a 15-second timeout. Sina's share-volume unit is normalized to
+the same internal share unit, the requested point-in-time window is applied before normalization,
+and `intraday_transport`/`upstream` provider metadata records which source answered. If both sources
+fail, the existing conservative whole-operation retry policy applies. Domain and feature code never
+branch on either upstream.
+
+One AKShare provider instance shares a thread-safe 60-second intraday primary-transport cooldown
+after a network failure. During that interval it calls the existing Sina fallback directly,
+avoiding repeated waits for every candidate. After expiry it tries the primary again. Schema
+failures do not activate the cooldown. Snapshot capture is unaffected.
 
 The provider request ends at the explicit analysis `as_of`, but the domain engine independently
 filters every normalized bar with `ended_at > analysis_as_of`. This defense remains mandatory even

@@ -3,6 +3,11 @@
 - Status: Accepted
 - Date: 2026-08-30
 
+The CLI-only delivery decision was extended by single-candidate research in
+[ADR 0013](0013-authenticated-on-demand-tail-radar-research.md), whose credential policy is now
+superseded by [ADR 0014](0014-request-scoped-user-openai-keys.md). Provider and point-in-time
+integrity decisions remain in force.
+
 ## Context
 
 Tail Radar candidates need evidence-backed company, sector, policy, macro, supply-chain, and market
@@ -40,6 +45,12 @@ content as a versioned `tail_radar.web_research` `ResearchArtifact`. Public cand
 read the latest successful or no-evidence artifact, while execution stays an explicit backend CLI
 diagnostic.
 
+Prompt version `tail-radar-research-v2` adds a Simplified Chinese narrative-output requirement for
+the Chinese public interface. Source titles, URLs, stock symbols, company names, proper nouns,
+model identifiers, structured enum values, and version identifiers keep their authentic form.
+Version 1 artifacts remain immutable; the new version intentionally creates a distinct cache
+identity so changed instructions cannot reuse or overwrite an earlier paid analysis.
+
 ## Consequences
 
 Deterministic signals remain reproducible and independent of AI availability. Research has audited
@@ -52,4 +63,4 @@ recommendations are deferred.
 ## References
 
 - [OpenAI Responses API: create a response](https://developers.openai.com/api/reference/cli/resources/responses/methods/create)
-- [OpenAI GPT-5.5 model capabilities](https://developers.openai.com/api/docs/models/gpt-5.5)
+- [OpenAI GPT-5.6 Sol model capabilities](https://developers.openai.com/api/docs/models/gpt-5.6-sol)

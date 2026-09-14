@@ -1,0 +1,14 @@
+{
+  "id": "./",
+  "name": "A股实验室",
+  "short_name": "趋势雷达",
+  "lang": "zh-CN",
+  "start_url": "./#/trend-radar",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#0f766e",
+  "icons": [
+    { "src": "trend-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

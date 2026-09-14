@@ -5,10 +5,10 @@ import { ReservedModule } from '../../components/ReservedModule';
 export function AssistantPage() {
   return (
     <ReservedModule
-      eyebrow="AI / Research Assistant"
-      title="AI Research Assistant"
-      description="A future assistant grounded in the platform's own research outputs—not a disconnected generic chatbot."
-      purpose="This boundary will consume versioned artifacts from Tail Radar, Intelligence, and Quant Lab. Model access and secrets will remain entirely in the backend."
+      eyebrow="人工智能 / 研究助手"
+      title="AI 研究助手"
+      description="未来基于平台自身研究成果提供协助，而不是与业务脱节的通用聊天机器人。"
+      purpose="该模块将使用尾盘雷达、情报中心和量化实验室生成的版本化研究成果。模型访问和密钥始终只保留在后端。"
       icon={Bot}
     />
   );

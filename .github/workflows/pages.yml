@@ -1,0 +1,138 @@
+name: Deploy frontend to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/pages.yml"
+      - "scripts/*trend-data*"
+  workflow_dispatch:
+    inputs:
+      require_trend_data:
+        description: Fail deployment if the published Trend Radar data is missing
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build public frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.24.0
+          run_install: false
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Resolve and validate public configuration
+        shell: bash
+        run: |
+          node <<'NODE'
+          const raw = process.env.VITE_API_BASE_URL ?? '';
+          if (!raw) process.exit(0); // Trend Radar uses same-origin static results.
+          if (!raw || raw !== raw.trim()) {
+            throw new Error('Repository variable VITE_API_BASE_URL is required without surrounding whitespace.');
+          }
+          let value;
+          try {
+            value = new URL(raw);
+          } catch {
+            throw new Error('VITE_API_BASE_URL must be an absolute HTTPS backend URL.');
+          }
+          const hostname = value.hostname.toLowerCase();
+          const loopback =
+            hostname === 'localhost' ||
+            hostname.endsWith('.localhost') ||
+            hostname === '::1' ||
+            hostname === '[::1]' ||
+            /^127\./.test(hostname);
+          if (
+            value.protocol !== 'https:' ||
+            value.username ||
+            value.password ||
+            loopback ||
+            value.search ||
+            value.hash
+          ) {
+            throw new Error(
+              'VITE_API_BASE_URL must use HTTPS without credentials, loopback hosts, query, or fragment.',
+            );
+          }
+          NODE
+          repository_name="${GITHUB_REPOSITORY#*/}"
+          if [[ "${repository_name,,}" == "${GITHUB_REPOSITORY_OWNER,,}.github.io" ]]; then
+            public_base="/"
+          else
+            public_base="/${repository_name}/"
+          fi
+          echo "VITE_BASE_PATH=${public_base}" >> "${GITHUB_ENV}"
+      - name: Download public Trend Radar data
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUIRE_TREND_DATA: ${{ inputs.require_trend_data || 'false' }}
+        run: node scripts/download-trend-data.mjs
+      - name: Validate and install public result files
+        working-directory: .
+        shell: bash
+        run: |
+          if [[ -f "$RUNNER_TEMP/trend-radar-public.zip" ]]; then
+            python3 scripts/unpack-trend-data.py "$RUNNER_TEMP/trend-radar-public.zip" frontend/public/data/trend-radar
+          fi
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build static frontend
+        run: pnpm build
+      - name: Validate published asset paths and browser bundle
+        shell: bash
+        run: |
+          test -f dist/index.html
+          if ! grep -Fq "src=\"${VITE_BASE_PATH}assets/" dist/index.html; then
+            echo "Built index does not reference assets under ${VITE_BASE_PATH}."
+            exit 1
+          fi
+          if grep -RIE "OPENAI_API_KEY|MARKET_DATA_API_KEY|DATABASE_URL|POSTGRES_(DB|USER|PASSWORD)|postgres(ql)?(\+[^:]*)?://|https?://localhost:[0-9]+|https?://127\.0\.0\.1:[0-9]+|https?://\[::1\]:[0-9]+" dist; then
+            echo "A forbidden backend secret or local API assumption reached the static bundle."
+            exit 1
+          fi
+      - name: Upload frontend artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: frontend/dist
+
+  deploy:
+    name: Deploy GitHub Pages artifact
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

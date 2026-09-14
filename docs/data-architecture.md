@@ -1,5 +1,9 @@
 # Data architecture
 
+Trend Radar retains daily heat, coherent qfq bar vintages, scan history and immutable candidate
+evidence in local PostgreSQL. Only allowlisted scan summaries and candidate metrics are exported
+as static public JSON; schedule claims and worker heartbeat stay local. See [Trend Radar](trend-radar.md) for schemas, migration commands and retention limits.
+
 ## PostgreSQL: structured operational and research metadata
 
 PostgreSQL is authoritative for execution lifecycle, research artifacts, analysis and candidate
@@ -33,6 +37,9 @@ The durable relational contracts are:
   `analysis_as_of`, lifecycle, aggregate technical/research counts, and fatal-stage metadata.
 - `tail_radar_workflow_candidates` stores isolated technical/research stage state and immutable
   artifact/analysis links for every candidate, enabling safe resume after partial completion.
+- `tail_radar_schedules` stores one operational decision for each official Shanghai trade date,
+  including intended 14:30 time, calendar evidence, preflight report, missed/terminal status,
+  workflow linkage, actual orchestration timing, and bounded error metadata.
 
 Artifact type names are namespaced (for example `tail_radar.candidate`) and payload consumers
 must select a supported `schema_version`. The schema remains flexible without sacrificing indexed,
@@ -56,10 +63,17 @@ non-forced attempt for
 `(candidate, run, analysis_as_of, prompt_version, provider, requested_model)`. Forced attempts are
 separate rows linked to the cached base attempt; no result is overwritten.
 
-Phase 6 publishes no replacement aggregate signal. It orchestrates the existing candidate,
-intraday-feature, and web-research artifacts and records their progress relationally. Phase 7 uses
+Phase 6 publishes no replacement aggregate signal. Workflow version 2 orchestrates the candidate
+and intraday-feature artifacts, then leaves AI research pending as an optional, explicitly
+confirmed single-candidate follow-up using a request-scoped user key. The key is not persisted;
+research progress and artifact links remain relationally recorded. Phase 7 uses
 intraday artifact schema 2, which adds only the exact normalized, ordered, cutoff-safe bars used by
 `tail-radar-intraday-v2`; deterministic formulas remain unchanged.
+
+Phase 8 schedule rows do not replace `execution_runs` identities. A PostgreSQL advisory lock
+serializes active worker orchestration, while unique official workflow and snapshot indexes remain
+the durable duplicate protection. A `missed` schedule has no workflow link and therefore cannot be
+mistaken for a captured official point in time.
 
 ## Parquet: large immutable datasets
 

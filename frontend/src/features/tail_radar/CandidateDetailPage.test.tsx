@@ -1,12 +1,12 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, vi } from 'vitest';
 
 import { CandidateDetailPage } from './CandidateDetailPage';
 
 vi.mock('./IntradayChart', () => ({
-  IntradayChart: () => <div role="img" aria-label="fixture intraday chart" />,
+  IntradayChart: () => <div role="img" aria-label="测试用日内分时图" />,
 }));
 
 afterEach(() => {
@@ -35,19 +35,126 @@ it('visually and semantically separates market facts, deterministic features, an
     </QueryClientProvider>,
   );
 
-  expect(await screen.findByText('Raw market data')).toBeInTheDocument();
-  expect(screen.getByText('Deterministic calculations')).toBeInTheDocument();
-  expect(screen.getByText('AI interpretation')).toBeInTheDocument();
-  expect(screen.getByText('Verified disclosure before cutoff.')).toBeInTheDocument();
-  expect(screen.getByRole('link', { name: /Fixture source/ })).toHaveAttribute(
+  expect(await screen.findByText('原始市场数据')).toBeInTheDocument();
+  expect(screen.getByText('确定性计算')).toBeInTheDocument();
+  expect(screen.getByText('AI 解释')).toBeInTheDocument();
+  expect(screen.getByText('截止时点前已核实的公告。')).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: /示例来源/ })).toHaveAttribute(
     'href',
     'https://example.com/disclosure',
   );
   expect(screen.getByText('tail-radar-intraday-v2')).toBeInTheDocument();
-  expect(screen.getByText('tail-radar-research-v1')).toBeInTheDocument();
-  expect(screen.getByText('available at as of')).toBeInTheDocument();
-  expect(screen.getByText(/retrieved 2026\/08\/28 14:35:00/)).toBeInTheDocument();
+  expect(screen.getByText('tail-radar-research-v2')).toBeInTheDocument();
+  expect(screen.getByText('截止时点前可获得')).toBeInTheDocument();
+  expect(screen.getByText(/检索时间 2026\/08\/28 14:35:00/)).toBeInTheDocument();
 });
+
+it('does not call paid research until the user confirms one candidate', async () => {
+  const candidateId = '55555555-5555-4555-8555-555555555555';
+  const original = candidatePayload(candidateId);
+  const pending = {
+    ...original,
+    web_research: null,
+    workflow_state: {
+      ...original.workflow_state,
+      research_status: 'pending',
+    },
+  };
+  const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+    const inputUrl =
+      input instanceof Request ? input.url : input instanceof URL ? input.href : input;
+    const path = new URL(inputUrl, 'http://localhost').pathname;
+    const payload = path.endsWith('/research-availability')
+      ? {
+          enabled: true,
+          model_identifier: 'gpt-5.6-sol',
+          one_candidate_per_request: true,
+          requires_user_api_key: true,
+          automatic_batch_research: false,
+        }
+      : init?.method === 'POST'
+        ? original.web_research
+        : pending;
+    return Promise.resolve(
+      new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={[`/tail-radar/candidates/${candidateId}`]}>
+        <Routes>
+          <Route path="/tail-radar/candidates/:candidateId" element={<CandidateDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+
+  const button = await screen.findByRole('button', { name: '确认并分析当前股票' });
+  expect(
+    fetchMock.mock.calls.filter((call) => (call[1] as RequestInit | undefined)?.method === 'POST'),
+  ).toHaveLength(0);
+
+  fireEvent.change(screen.getByPlaceholderText('输入你自己的 OpenAI 接口密钥'), {
+    target: { value: 'test-user-api-key' },
+  });
+  fireEvent.click(screen.getByLabelText(/我确认仅分析当前股票，并理解这一次操作可能产生/));
+  fireEvent.click(button);
+
+  await waitFor(() => {
+    expect(
+      fetchMock.mock.calls.filter(
+        (call) => (call[1] as RequestInit | undefined)?.method === 'POST',
+      ),
+    ).toHaveLength(1);
+  });
+  const paidCall = fetchMock.mock.calls.find(
+    (call) => (call[1] as RequestInit | undefined)?.method === 'POST',
+  );
+  const headers = new Headers((paidCall?.[1] as RequestInit | undefined)?.headers);
+  expect(headers.get('X-OpenAI-API-Key')).toBe('test-user-api-key');
+});
+
+it('refreshes running research without submitting another paid request', async () => {
+  const candidateId = '55555555-5555-4555-8555-555555555555';
+  const original = candidatePayload(candidateId);
+  let reads = 0;
+  const fetchMock = vi.fn().mockImplementation((input: string, init?: RequestInit) => {
+    expect(init?.method).not.toBe('POST');
+    const payload = input.endsWith('/research-availability')
+      ? { enabled: true, model_identifier: 'test-model' }
+      : ++reads === 1
+        ? {
+            ...original,
+            web_research: null,
+            workflow_state: { ...original.workflow_state, research_status: 'running' },
+          }
+        : original;
+    return Promise.resolve(new Response(JSON.stringify(payload)));
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const view = render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={[`/tail-radar/candidates/${candidateId}`]}>
+        <Routes>
+          <Route path="/tail-radar/candidates/:candidateId" element={<CandidateDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  expect(await screen.findByRole('button', { name: '当前股票正在分析' })).toBeDisabled();
+  expect(
+    await screen.findByText('基于证据的研究摘要。', {}, { timeout: 7_000 }),
+  ).toBeInTheDocument();
+  expect(reads).toBe(2);
+  view.unmount();
+  client.clear();
+}, 10_000);
 
 function candidatePayload(candidateId: string) {
   const asOf = '2026-08-28T14:35:00+08:00';
@@ -57,6 +164,7 @@ function candidatePayload(candidateId: string) {
     run_id: '11111111-1111-4111-8111-111111111111',
     snapshot_id: '22222222-2222-4222-8222-222222222222',
     symbol: '600000',
+    board: 'shanghai_main',
     trade_date: '2026-08-28',
     as_of: '2026-08-28T14:30:02+08:00',
     screening_rule_version: 'tail-radar-screen-v1',
@@ -113,11 +221,11 @@ function candidatePayload(candidateId: string) {
       research_id: '88888888-8888-4888-8888-888888888888',
       analysis_as_of: asOf,
       status: 'succeeded',
-      concise_summary: 'Evidence-backed summary.',
+      concise_summary: '基于证据的研究摘要。',
       verified_facts: [
         {
           claim_id: 'fact_1',
-          statement: 'Verified disclosure before cutoff.',
+          statement: '截止时点前已核实的公告。',
           classification: 'verified_fact',
           source_ids: [sourceId],
         },
@@ -128,14 +236,14 @@ function candidatePayload(candidateId: string) {
       market_context: [],
       positive_factors: [],
       risk_factors: [],
-      unresolved_questions: ['Causality remains uncertain.'],
+      unresolved_questions: ['价格变化的因果关系仍不确定。'],
       evidence_quality: 'medium',
       confidence: 0.68,
       sources: [
         {
           source_id: sourceId,
           url: 'https://example.com/disclosure',
-          title: 'Fixture source',
+          title: '示例来源',
           publisher_domain: 'example.com',
           published_at: '2026-08-28T10:00:00+08:00',
           publication_timestamp_status: 'verified',
@@ -146,7 +254,7 @@ function candidatePayload(candidateId: string) {
       ],
       provider: 'openai',
       model_identifier: 'fixture-model',
-      prompt_version: 'tail-radar-research-v1',
+      prompt_version: 'tail-radar-research-v2',
       created_at: asOf,
     },
     workflow_state: {

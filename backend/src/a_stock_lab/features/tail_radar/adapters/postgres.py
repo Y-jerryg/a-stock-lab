@@ -961,6 +961,20 @@ class PostgresTailRadarRepository:
             except (SQLAlchemyError, ValidationError) as exc:
                 raise TailRadarPersistenceError("Tail Radar workflow could not be read") from exc
 
+    def get_workflow_for_intended_time(
+        self, *, intended_snapshot_time: datetime, workflow_version: str
+    ) -> TailRadarWorkflowData | None:
+        with self._session_factory() as session:
+            try:
+                row = self._find_workflow(
+                    session,
+                    intended_snapshot_time=intended_snapshot_time,
+                    workflow_version=workflow_version,
+                )
+                return None if row is None else self._workflow_data(*row)
+            except (SQLAlchemyError, ValidationError) as exc:
+                raise TailRadarPersistenceError("Tail Radar workflow could not be read") from exc
+
     def get_workflow_for_screening_run(
         self, screening_run_id: UUID
     ) -> TailRadarWorkflowData | None:
@@ -1237,8 +1251,6 @@ class PostgresTailRadarRepository:
                     (
                         workflow.technical_failed_count,
                         workflow.technical_pending_count,
-                        workflow.research_failed_count,
-                        workflow.research_pending_count,
                     )
                 )
                 workflow.lifecycle = (

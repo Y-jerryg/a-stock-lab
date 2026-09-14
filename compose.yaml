@@ -12,7 +12,7 @@ services:
       - postgres-data:/var/lib/postgresql/data
     ports:
       # Host publication is for local database tools only; the container port remains 5432.
-      - "${POSTGRES_HOST_PORT:-5433}:5432"
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5433}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
@@ -21,46 +21,59 @@ services:
       start_period: 5s
 
   backend:
+    image: a-stock-lab-backend:local
     build:
       context: ./backend
       target: runtime
     restart: unless-stopped
     environment:
-      APP_ENV: ${APP_ENV:-development}
-      # Docker services use the service hostname and internal port, never the host-published port.
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-a_stock_lab}:${POSTGRES_PASSWORD:-a_stock_lab}@postgres:5432/${POSTGRES_DB:-a_stock_lab}
-      API_HOST: 0.0.0.0
-      API_PORT: 8000
-      CORS_ORIGINS: '${CORS_ORIGINS:-["http://localhost:5173","http://localhost:8080"]}'
+      <<: &runtime-environment
+        APP_ENV: ${APP_ENV:-development}
+        # Docker services use the service hostname and internal port, never the host-published port.
+        DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-a_stock_lab}:${POSTGRES_PASSWORD:-a_stock_lab}@postgres:5432/${POSTGRES_DB:-a_stock_lab}
+        API_HOST: 0.0.0.0
+        API_PORT: 8000
+        CORS_ORIGINS: '${CORS_ORIGINS:-["http://localhost:5173","http://localhost:8080"]}'
+        MARKET_DATA_API_KEY: ${MARKET_DATA_API_KEY:-}
+        RUNTIME_DATA_DIR: /app/runtime
+        MARKET_DATA_RETRY_ATTEMPTS: ${MARKET_DATA_RETRY_ATTEMPTS:-2}
+        MARKET_DATA_RETRY_DELAY_SECONDS: ${MARKET_DATA_RETRY_DELAY_SECONDS:-5}
+        TAIL_RADAR_INTRADAY_WORKERS: ${TAIL_RADAR_INTRADAY_WORKERS:-4}
+        MARKET_SNAPSHOT_MIN_RECORDS: ${MARKET_SNAPSHOT_MIN_RECORDS:-4000}
+        MARKET_SNAPSHOT_MAX_DUPLICATE_SYMBOLS: ${MARKET_SNAPSHOT_MAX_DUPLICATE_SYMBOLS:-0}
+        MARKET_SNAPSHOT_MAX_MISSING_SYMBOL_RATIO: ${MARKET_SNAPSHOT_MAX_MISSING_SYMBOL_RATIO:-0.001}
+        MARKET_SNAPSHOT_MAX_INVALID_PRICE_RATIO: ${MARKET_SNAPSHOT_MAX_INVALID_PRICE_RATIO:-0.005}
+        MARKET_SNAPSHOT_MAX_INVALID_PCT_CHANGE_RATIO: ${MARKET_SNAPSHOT_MAX_INVALID_PCT_CHANGE_RATIO:-0.005}
+        MARKET_SNAPSHOT_MAX_MALFORMED_ROW_RATIO: ${MARKET_SNAPSHOT_MAX_MALFORMED_ROW_RATIO:-0.01}
+        MARKET_SNAPSHOT_MAX_ABS_PCT_CHANGE: ${MARKET_SNAPSHOT_MAX_ABS_PCT_CHANGE:-1000}
+        TAIL_RADAR_WORKER_POLL_INTERVAL_SECONDS: ${TAIL_RADAR_WORKER_POLL_INTERVAL_SECONDS:-5}
+        TAIL_RADAR_WORKER_PREFLIGHT_LEAD_SECONDS: ${TAIL_RADAR_WORKER_PREFLIGHT_LEAD_SECONDS:-60}
+        TAIL_RADAR_WORKER_MAXIMUM_START_DELAY_SECONDS: ${TAIL_RADAR_WORKER_MAXIMUM_START_DELAY_SECONDS:-30}
+        TAIL_RADAR_WORKER_HEARTBEAT_MAX_AGE_SECONDS: ${TAIL_RADAR_WORKER_HEARTBEAT_MAX_AGE_SECONDS:-30}
+        TAIL_RADAR_ON_DEMAND_RESEARCH_ENABLED: ${TAIL_RADAR_ON_DEMAND_RESEARCH_ENABLED:-false}
+        LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Optional CLI-only key. Browser research uses a request-scoped user key instead.
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_RESEARCH_MODEL: ${OPENAI_RESEARCH_MODEL:-gpt-5.5-2026-04-23}
+      OPENAI_RESEARCH_MODEL: ${OPENAI_RESEARCH_MODEL:-gpt-5.6-sol}
       OPENAI_RESEARCH_TIMEOUT_SECONDS: ${OPENAI_RESEARCH_TIMEOUT_SECONDS:-90}
       OPENAI_RESEARCH_MAX_OUTPUT_TOKENS: ${OPENAI_RESEARCH_MAX_OUTPUT_TOKENS:-6000}
       OPENAI_RESEARCH_MAX_WEB_SEARCH_CALLS: ${OPENAI_RESEARCH_MAX_WEB_SEARCH_CALLS:-8}
       OPENAI_RESEARCH_SEARCH_CONTEXT_SIZE: ${OPENAI_RESEARCH_SEARCH_CONTEXT_SIZE:-medium}
-      MARKET_DATA_API_KEY: ${MARKET_DATA_API_KEY:-}
-      RUNTIME_DATA_DIR: /app/runtime
-      MARKET_DATA_RETRY_ATTEMPTS: ${MARKET_DATA_RETRY_ATTEMPTS:-2}
-      MARKET_DATA_RETRY_DELAY_SECONDS: ${MARKET_DATA_RETRY_DELAY_SECONDS:-5}
-      MARKET_SNAPSHOT_MIN_RECORDS: ${MARKET_SNAPSHOT_MIN_RECORDS:-4000}
-      MARKET_SNAPSHOT_MAX_DUPLICATE_SYMBOLS: ${MARKET_SNAPSHOT_MAX_DUPLICATE_SYMBOLS:-0}
-      MARKET_SNAPSHOT_MAX_MISSING_SYMBOL_RATIO: ${MARKET_SNAPSHOT_MAX_MISSING_SYMBOL_RATIO:-0.001}
-      MARKET_SNAPSHOT_MAX_INVALID_PRICE_RATIO: ${MARKET_SNAPSHOT_MAX_INVALID_PRICE_RATIO:-0.005}
-      MARKET_SNAPSHOT_MAX_INVALID_PCT_CHANGE_RATIO: ${MARKET_SNAPSHOT_MAX_INVALID_PCT_CHANGE_RATIO:-0.005}
-      MARKET_SNAPSHOT_MAX_MALFORMED_ROW_RATIO: ${MARKET_SNAPSHOT_MAX_MALFORMED_ROW_RATIO:-0.01}
-      MARKET_SNAPSHOT_MAX_ABS_PCT_CHANGE: ${MARKET_SNAPSHOT_MAX_ABS_PCT_CHANGE:-1000}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
     command:
-      - /bin/sh
-      - -c
-      - alembic upgrade head && exec uvicorn a_stock_lab.main:app --host 0.0.0.0 --port 8000
+      - uvicorn
+      - a_stock_lab.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --no-access-log
     volumes:
       - ./runtime:/app/runtime
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test:
         [
@@ -74,6 +87,74 @@ services:
       retries: 10
       start_period: 10s
 
+  migrate:
+    image: a-stock-lab-backend:local
+    restart: "no"
+    environment: *runtime-environment
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    image: a-stock-lab-backend:local
+    restart: unless-stopped
+    environment: *runtime-environment
+    command:
+      - tail-radar
+      - worker
+    volumes:
+      - ./runtime:/app/runtime
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "tail-radar", "worker-health", "--max-age-seconds", "30"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  trend-worker:
+    image: a-stock-lab-backend:local
+    build:
+      context: ./backend
+      target: runtime
+    profiles: [trend]
+    restart: unless-stopped
+    environment:
+      <<: *runtime-environment
+      TREND_TOP_N: ${TREND_TOP_N:-300}
+      TREND_MIN_DAYS: ${TREND_MIN_DAYS:-7}
+      TREND_MAX_DAYS: ${TREND_MAX_DAYS:-9}
+      TREND_MAX_PULLBACK_DAYS: ${TREND_MAX_PULLBACK_DAYS:-3}
+      TREND_MAX_SINGLE_PULLBACK_PCT: ${TREND_MAX_SINGLE_PULLBACK_PCT:-1.5}
+      TREND_BASELINE_VOLUME_DAYS: ${TREND_BASELINE_VOLUME_DAYS:-20}
+      TREND_STRONG_VOLUME_RATIO: ${TREND_STRONG_VOLUME_RATIO:-0.55}
+      TREND_SCHEDULE_TIME: ${TREND_SCHEDULE_TIME:-15:45}
+      TREND_TIMEZONE: ${TREND_TIMEZONE:-Asia/Shanghai}
+      TREND_SCHEDULE_POLL_SECONDS: ${TREND_SCHEDULE_POLL_SECONDS:-5}
+      TREND_HEARTBEAT_SECONDS: ${TREND_HEARTBEAT_SECONDS:-20}
+      TREND_PROVIDER_TIMEOUT_SECONDS: ${TREND_PROVIDER_TIMEOUT_SECONDS:-60}
+      TREND_PROVIDER_ATTEMPTS: ${TREND_PROVIDER_ATTEMPTS:-3}
+      TREND_PROVIDER_PACE_SECONDS: ${TREND_PROVIDER_PACE_SECONDS:-0.3}
+      TREND_MAX_FAILURE_RATIO: ${TREND_MAX_FAILURE_RATIO:-0.2}
+      TREND_MAX_CONSECUTIVE_FAILURES: ${TREND_MAX_CONSECUTIVE_FAILURES:-10}
+    command: ["trend-radar", "worker"]
+    volumes:
+      - ./runtime:/app/runtime
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    stop_grace_period: 45s
+    healthcheck:
+      test: ["CMD", "trend-radar", "worker-health"]
+      interval: 30s
+      timeout: 25s
+      retries: 3
+      start_period: 30s
+
   frontend:
     build:
       context: ./frontend
@@ -83,7 +164,9 @@ services:
         VITE_BASE_PATH: "/"
     restart: unless-stopped
     ports:
-      - "8080:80"
+      - "127.0.0.1:8080:80"
+    volumes:
+      - ./runtime/public/trend-radar:/usr/share/nginx/html/data/trend-radar:ro
     depends_on:
       backend:
         condition: service_healthy

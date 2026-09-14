@@ -39,3 +39,4 @@ runtime/exports/**
 *.log
 coverage.xml
 htmlcov/
+frontend/public/data/trend-radar/

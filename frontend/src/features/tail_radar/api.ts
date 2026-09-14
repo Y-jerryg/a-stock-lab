@@ -10,6 +10,7 @@ export type WorkflowLifecycle =
   | 'partial_success'
   | 'failed';
 export type StageStatus = 'pending' | 'running' | 'succeeded' | 'no_evidence' | 'failed';
+export type AShareBoard = 'shanghai_main' | 'shenzhen_main' | 'chinext' | 'star' | 'beijing';
 
 export interface TailRadarRun {
   run_id: string;
@@ -85,11 +86,15 @@ export interface TailRadarCandidateSummary {
   snapshot_id: string;
   symbol: string;
   exchange: string | null;
+  board: AShareBoard | null;
   name: string | null;
   price: number;
   pct_change: number;
   amount: number | null;
   turnover_rate: number | null;
+  amplitude: number | null;
+  volume_ratio: number | null;
+  float_market_cap: number | null;
   as_of: string;
   screening_rule_version: string;
   intraday_position: number | null;
@@ -142,11 +147,20 @@ export interface ResearchSource {
   relationship_claim_ids: string[];
 }
 
+export interface ResearchAvailability {
+  enabled: boolean;
+  model_identifier: string;
+  one_candidate_per_request: true;
+  requires_user_api_key: true;
+  automatic_batch_research: false;
+}
+
 export interface CandidateDetail {
   candidate_id: string;
   run_id: string;
   snapshot_id: string;
   symbol: string;
+  board: AShareBoard | null;
   trade_date: string;
   as_of: string;
   screening_rule_version: string;
@@ -295,4 +309,16 @@ export async function getAllCandidates(runId: string): Promise<TailRadarCandidat
 
 export function getCandidate(candidateId: string) {
   return apiClient.get<CandidateDetail>(`/api/v1/tail-radar/candidates/${candidateId}`);
+}
+
+export function getResearchAvailability() {
+  return apiClient.get<ResearchAvailability>('/api/v1/tail-radar/research-availability');
+}
+
+export function researchCandidate(candidateId: string, openaiApiKey: string, retryFailed: boolean) {
+  return apiClient.post<NonNullable<CandidateDetail['web_research']>>(
+    `/api/internal/v1/tail-radar/candidates/${candidateId}/research`,
+    { confirmed: true, retry_failed: retryFailed },
+    { 'X-OpenAI-API-Key': openaiApiKey },
+  );
 }

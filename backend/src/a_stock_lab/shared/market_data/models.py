@@ -20,6 +20,14 @@ class AShareExchange(StrEnum):
     BEIJING = "BSE"
 
 
+class AShareBoard(StrEnum):
+    SHANGHAI_MAIN = "shanghai_main"
+    SHENZHEN_MAIN = "shenzhen_main"
+    CHINEXT = "chinext"
+    STAR = "star"
+    BEIJING = "beijing"
+
+
 class MarketDataCapability(StrEnum):
     FULL_MARKET_SNAPSHOT = "full_market_snapshot"
     INTRADAY_BARS = "intraday_bars"

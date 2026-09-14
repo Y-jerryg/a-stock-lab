@@ -7,14 +7,17 @@ from openai import (
     APIResponseValidationError,
     APIStatusError,
     APITimeoutError,
+    AuthenticationError,
     ContentFilterFinishReasonError,
     LengthFinishReasonError,
     OpenAI,
+    PermissionDeniedError,
     RateLimitError,
 )
 from openai.types.responses import WebSearchToolParam
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
+from a_stock_lab.core.logging import get_logger
 from a_stock_lab.core.time import as_market_timezone, now_in_market_timezone
 from a_stock_lab.features.tail_radar.application.research_models import (
     ResearchProviderRequest,
@@ -24,17 +27,61 @@ from a_stock_lab.features.tail_radar.application.research_models import (
 )
 from a_stock_lab.features.tail_radar.domain.errors import (
     ResearchProviderAPIError,
+    ResearchProviderAuthenticationError,
     ResearchProviderInvalidResponseError,
     ResearchProviderRateLimitError,
     ResearchProviderTimeoutError,
     ResearchProviderUnavailableError,
 )
 from a_stock_lab.features.tail_radar.domain.research import (
+    PublicationTimestampStatus,
+    ResearchClaimClassification,
+    ResearchEvidenceQuality,
     TailRadarResearchProviderOutput,
     canonical_source_url,
 )
 
 OPENAI_RESEARCH_PROVIDER_ID = "openai"
+logger = get_logger(__name__)
+
+
+class _OpenAIResearchClaim(BaseModel):
+    """SDK wire model limited to the JSON Schema subset accepted by Structured Outputs."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    claim_id: str
+    statement: str
+    classification: ResearchClaimClassification
+    source_urls: list[str]
+
+
+class _OpenAISourceAssessment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    url: str
+    published_at: str | None
+    publication_timestamp_status: PublicationTimestampStatus
+    relationship_claim_ids: list[str]
+
+
+class _OpenAIResearchOutput(BaseModel):
+    """Transport-only shape; the provider-independent domain model performs rich validation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    concise_summary: str
+    verified_facts: list[_OpenAIResearchClaim]
+    likely_drivers: list[_OpenAIResearchClaim]
+    company_context: list[_OpenAIResearchClaim]
+    sector_context: list[_OpenAIResearchClaim]
+    market_context: list[_OpenAIResearchClaim]
+    positive_factors: list[_OpenAIResearchClaim]
+    risk_factors: list[_OpenAIResearchClaim]
+    unresolved_questions: list[str]
+    evidence_quality: ResearchEvidenceQuality
+    confidence: float
+    source_assessments: list[_OpenAISourceAssessment]
 
 
 class OpenAIResearchProvider:
@@ -90,9 +137,13 @@ class OpenAIResearchProvider:
                 parallel_tool_calls=False,
                 prompt_cache_key=request.prompt_version,
                 store=False,
-                text_format=TailRadarResearchProviderOutput,
+                text_format=_OpenAIResearchOutput,
                 timeout=self._timeout_seconds,
             )
+        except (AuthenticationError, PermissionDeniedError) as exc:
+            raise ResearchProviderAuthenticationError(
+                "The supplied OpenAI API key was rejected"
+            ) from exc
         except RateLimitError as exc:
             raise ResearchProviderRateLimitError("OpenAI research rate limit was reached") from exc
         except APITimeoutError as exc:
@@ -102,6 +153,10 @@ class OpenAIResearchProvider:
                 "OpenAI research service is unavailable"
             ) from exc
         except APIStatusError as exc:
+            if exc.status_code in {401, 403}:
+                raise ResearchProviderAuthenticationError(
+                    "The supplied OpenAI API key was rejected"
+                ) from exc
             if exc.status_code == 408:
                 raise ResearchProviderTimeoutError("OpenAI research request timed out") from exc
             if exc.status_code == 429:
@@ -112,6 +167,16 @@ class OpenAIResearchProvider:
                 raise ResearchProviderUnavailableError(
                     "OpenAI research API is unavailable"
                 ) from exc
+            error_code, error_param = _safe_openai_error_metadata(exc.body)
+            logger.warning(
+                "openai_research_api_rejected",
+                extra={
+                    "provider": OPENAI_RESEARCH_PROVIDER_ID,
+                    "status_code": exc.status_code,
+                    "upstream_error_code": error_code,
+                    "upstream_error_param": error_param,
+                },
+            )
             raise ResearchProviderAPIError("OpenAI research API rejected the request") from exc
         except (
             APIResponseValidationError,
@@ -126,11 +191,19 @@ class OpenAIResearchProvider:
                 "OpenAI research response could not be validated"
             ) from exc
 
-        output = response.output_parsed
-        if output is None:
+        parsed_output = response.output_parsed
+        if parsed_output is None:
             raise ResearchProviderInvalidResponseError(
                 "OpenAI research response contained no structured output"
             )
+        try:
+            output = TailRadarResearchProviderOutput.model_validate(
+                parsed_output.model_dump(mode="json")
+            )
+        except (ValidationError, ValueError, TypeError) as exc:
+            raise ResearchProviderInvalidResponseError(
+                "OpenAI research response could not be validated"
+            ) from exc
         retrieved_at = as_market_timezone(self._clock())
         raw_response = response.model_dump(mode="json")
         sources, source_warnings = _extract_sources(raw_response, retrieved_at=retrieved_at)
@@ -161,6 +234,24 @@ class OpenAIResearchProvider:
                 "store": False,
             },
         )
+
+
+def _safe_openai_error_metadata(body: object) -> tuple[str | None, str | None]:
+    """Extract only bounded server classification fields; never log the upstream message/body."""
+
+    if not isinstance(body, dict):
+        return None, None
+    # The SDK normally unwraps the HTTP {"error": ...} envelope into exc.body.
+    error = body.get("error", body)
+    if not isinstance(error, dict):
+        return None, None
+
+    def bounded_text(value: object) -> str | None:
+        if not isinstance(value, str) or not value:
+            return None
+        return value[:160]
+
+    return bounded_text(error.get("code")), bounded_text(error.get("param"))
 
 
 def _extract_sources(

@@ -1,6 +1,8 @@
 # Deployment architecture
 
-Phases 0 through 3 define deployable boundaries but do not deploy them.
+The repository defines independently deployable static frontend, API, worker, PostgreSQL, and
+runtime-artifact boundaries. Local Compose is a validation/development topology, not a complete
+internet production platform.
 
 ## Frontend
 
@@ -13,6 +15,13 @@ variables.
 The container deployment uses Nginx and same-origin `/api` proxying. This is convenient for local or
 single-environment container hosting and does not constrain the independent static deployment.
 
+The GitHub Pages workflow builds only `frontend/` and uploads only `frontend/dist`. It derives the
+repository project base, loads the published Trend Radar result bundle, rejects local or
+credential-bearing `VITE_API_BASE_URL` values when configured, and deploys with the `github-pages`
+environment. Trend Radar needs no public backend; other API-driven modules still need one. CI and
+Pages deployment remain separate workflows. Repository setup and the deployment blocker are
+documented in [github-pages.md](github-pages.md).
+
 ## Backend
 
 The FastAPI image is independently deployable and configuration-only. Production should inject
@@ -20,9 +29,15 @@ The FastAPI image is independently deployable and configuration-only. Production
 through a secret manager or protected environment configuration. API documentation is disabled when
 `APP_ENV=production`.
 
-The same image exposes the manual `market-snapshot` and `tail-radar` commands and can later launch a
-worker entry point that imports the same application/domain code. No queue, recurring scheduler, or
-worker service exists yet. Public Tail Radar routes read persisted data only.
+The same image exposes the manual `market-snapshot` and `tail-radar` commands and launches the
+separate `tail-radar worker` Compose service. The worker invokes the same application/domain code;
+the FastAPI process never starts a scheduler. PostgreSQL coordinates the daily schedule and active
+execution. No Redis, Celery, or queue is required. Public Tail Radar routes read persisted data only.
+
+The worker emits a secret-free heartbeat below mounted `runtime/worker/`, which Compose uses for
+liveness. It handles SIGTERM/SIGINT gracefully. Production still needs external alerting for
+preflight degradation, missed schedules, failed/partial runs, and stale heartbeats; container
+restart policy alone is not monitoring.
 
 ## Database and datasets
 
@@ -41,9 +56,11 @@ Compose network. A host-published database port should not be exposed in a produ
 
 ## Network and access boundary
 
-Public users receive read-oriented `/api/v1` routes. Future expensive or mutating research operations
-belong behind authentication and authorization on a separate internal boundary. CORS is an additional
-browser control, not authentication.
+Public users receive read-oriented `/api/v1` routes. Single-candidate AI research remains under the
+separate `/api/internal/v1` operational boundary and requires the caller's transient OpenAI key plus
+explicit cost confirmation. This BYOK credential is not A-Stock Lab authentication. CORS is an
+additional browser control, not authentication. Production BYOK requires HTTPS, a trusted backend,
+abuse controls, and browser security hardening before public use.
 
 No cloud provider, monitoring vendor, domain, TLS termination, authentication system, recurring
 scheduler, or production data retention policy is selected through Phase 3.

@@ -464,3 +464,86 @@ class TailRadarWorkflowCandidateRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+
+
+class TailRadarScheduleRecord(Base):
+    """Operational evidence for one official 14:30 schedule decision."""
+
+    __tablename__ = "tail_radar_schedules"
+    __table_args__ = (
+        UniqueConstraint(
+            "job_name",
+            "trade_date",
+            "schedule_version",
+            name="uq_tail_radar_schedules_logical_day",
+        ),
+        CheckConstraint(
+            "status IN ('scheduled', 'preflight_ready', 'preflight_degraded', "
+            "'executing', 'succeeded', 'partial_success', 'failed', 'missed', "
+            "'not_trading_day')",
+            name="status_valid",
+        ),
+        CheckConstraint(
+            "preflight_finished_at IS NULL OR preflight_started_at IS NOT NULL",
+            name="preflight_finish_requires_start",
+        ),
+        CheckConstraint(
+            "preflight_finished_at IS NULL OR preflight_finished_at >= preflight_started_at",
+            name="preflight_timing_order",
+        ),
+        CheckConstraint(
+            "execution_finished_at IS NULL OR execution_started_at IS NULL OR "
+            "execution_finished_at >= execution_started_at",
+            name="execution_timing_order",
+        ),
+        CheckConstraint(
+            "status <> 'executing' OR execution_started_at IS NOT NULL",
+            name="executing_requires_start",
+        ),
+        CheckConstraint(
+            "status NOT IN ('succeeded', 'partial_success') OR "
+            "(workflow_run_id IS NOT NULL AND execution_finished_at IS NOT NULL)",
+            name="completion_requires_provenance",
+        ),
+        CheckConstraint(
+            "status <> 'missed' OR workflow_run_id IS NULL",
+            name="missed_has_no_workflow",
+        ),
+        CheckConstraint(
+            "status <> 'not_trading_day' OR is_trading_day = false",
+            name="calendar_status_consistent",
+        ),
+        Index("ix_tail_radar_schedules_trade_date", "trade_date"),
+        Index("ix_tail_radar_schedules_status", "status"),
+    )
+
+    schedule_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    job_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    schedule_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    trade_date: Mapped[date] = mapped_column(Date, nullable=False)
+    intended_snapshot_time: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    is_trading_day: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    calendar_provider: Mapped[str] = mapped_column(String(128), nullable=False)
+    preflight_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    preflight_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    preflight_report: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    workflow_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tail_radar_workflows.workflow_run_id", ondelete="RESTRICT"),
+        unique=True,
+    )
+    execution_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    execution_finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_code: Mapped[str | None] = mapped_column(String(128))
+    error_details: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )

@@ -1,5 +1,6 @@
 from collections.abc import Sequence
-from datetime import datetime
+from contextlib import AbstractContextManager
+from datetime import date, datetime
 from typing import Protocol
 from uuid import UUID
 
@@ -29,6 +30,11 @@ from a_stock_lab.features.tail_radar.application.research_models import (
     TailRadarResearchClaimResult,
     TailRadarResearchCompletion,
     TailRadarResearchData,
+)
+from a_stock_lab.features.tail_radar.application.scheduling_models import (
+    TailRadarPreflightReport,
+    TailRadarScheduleData,
+    TailRadarScheduleStatus,
 )
 from a_stock_lab.features.tail_radar.domain.screening import TailRadarScreeningConfiguration
 from a_stock_lab.shared.market_data.models import FullMarketSnapshot
@@ -142,6 +148,10 @@ class TailRadarWorkflowRepository(Protocol):
 
     def get_workflow(self, workflow_run_id: UUID) -> TailRadarWorkflowData | None: ...
 
+    def get_workflow_for_intended_time(
+        self, *, intended_snapshot_time: datetime, workflow_version: str
+    ) -> TailRadarWorkflowData | None: ...
+
     def get_workflow_for_screening_run(
         self, screening_run_id: UUID
     ) -> TailRadarWorkflowData | None: ...
@@ -214,3 +224,38 @@ class TailRadarWorkflowRepository(Protocol):
 
 class TailRadarDataRepository(TailRadarRepository, TailRadarWorkflowRepository, Protocol):
     """Combined persistence boundary used only by composed reads and orchestration wiring."""
+
+
+class TailRadarScheduleRepository(Protocol):
+    def ensure_schedule(
+        self,
+        *,
+        intended_snapshot_time: datetime,
+        is_trading_day: bool,
+        calendar_provider: str,
+        observed_at: datetime,
+    ) -> TailRadarScheduleData: ...
+
+    def get_schedule(self, trade_date: date) -> TailRadarScheduleData | None: ...
+
+    def record_preflight(
+        self,
+        *,
+        schedule_id: UUID,
+        started_at: datetime,
+        finished_at: datetime,
+        report: TailRadarPreflightReport,
+    ) -> TailRadarScheduleData: ...
+
+    def update_schedule(
+        self,
+        *,
+        schedule_id: UUID,
+        status: TailRadarScheduleStatus,
+        observed_at: datetime,
+        workflow_run_id: UUID | None = None,
+        error_code: str | None = None,
+        error_details: dict[str, object] | None = None,
+    ) -> TailRadarScheduleData: ...
+
+    def execution_lock(self, intended_snapshot_time: datetime) -> AbstractContextManager[bool]: ...

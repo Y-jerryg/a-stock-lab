@@ -8,6 +8,7 @@ from a_stock_lab.api.v1.schemas.tail_radar import (
     TailRadarCandidateDetailResponse,
     TailRadarCandidateListResponse,
     TailRadarCandidateSummaryResponse,
+    TailRadarOnDemandResearchAvailabilityResponse,
     TailRadarRunListResponse,
     TailRadarRunResponse,
     TailRadarRunSummaryResponse,
@@ -15,10 +16,25 @@ from a_stock_lab.api.v1.schemas.tail_radar import (
     TailRadarWorkflowResponse,
 )
 from a_stock_lab.api.v1.services.tail_radar import get_tail_radar_query_service
+from a_stock_lab.core.config import Settings, get_settings
 from a_stock_lab.features.tail_radar.application.queries import TailRadarQueryService
 
 router = APIRouter(prefix="/tail-radar", tags=["tail-radar"])
 QueryService = Annotated[TailRadarQueryService, Depends(get_tail_radar_query_service)]
+SettingsDependency = Annotated[Settings, Depends(get_settings)]
+
+
+@router.get(
+    "/research-availability",
+    response_model=TailRadarOnDemandResearchAvailabilityResponse,
+)
+def research_availability(
+    settings: SettingsDependency,
+) -> TailRadarOnDemandResearchAvailabilityResponse:
+    return TailRadarOnDemandResearchAvailabilityResponse(
+        enabled=settings.tail_radar_on_demand_research_enabled,
+        model_identifier=settings.openai_research_model,
+    )
 
 
 @router.get("/runs/latest", response_model=TailRadarRunResponse)

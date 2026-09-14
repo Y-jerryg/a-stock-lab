@@ -45,3 +45,13 @@ def test_openai_key_is_secret_and_research_requires_explicit_backend_configurati
         build_tail_radar_research_service(Settings(openai_api_key=None))
     with pytest.raises(TailRadarResearchConfigurationError, match="OPENAI_API_KEY"):
         build_tail_radar_research_service(Settings(openai_api_key="   "))
+
+
+def test_on_demand_browser_research_needs_only_the_explicit_feature_flag() -> None:
+    settings = Settings(
+        openai_api_key=None,
+        tail_radar_on_demand_research_enabled=True,
+    )
+
+    assert settings.tail_radar_on_demand_research_enabled
+    assert "tail_radar_operations_token" not in Settings.model_fields

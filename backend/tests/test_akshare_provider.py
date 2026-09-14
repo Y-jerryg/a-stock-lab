@@ -5,7 +5,14 @@ import pytest
 from requests.exceptions import ConnectionError as RequestsConnectionError
 
 from a_stock_lab.core.time import MARKET_TIME_ZONE
-from a_stock_lab.shared.market_data.adapters.akshare import AkShareMarketDataProvider
+from a_stock_lab.shared.market_data.adapters.akshare import (
+    AkShareMarketDataProvider,
+    _fetch_live_frame,
+    _fetch_live_frame_from_delayed_endpoint,
+    _fetch_live_intraday_frame,
+    _fetch_live_intraday_frame_from_sina,
+    _LiveIntradayFetcher,
+)
 from a_stock_lab.shared.market_data.errors import (
     ProviderInvalidResponseError,
     ProviderTimeoutError,
@@ -65,6 +72,18 @@ class FakeFrame:
         return self._rows
 
 
+class FakeHttpResponse:
+    def __init__(self, payload: object, *, text: str = "") -> None:
+        self._payload = payload
+        self.text = text
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> object:
+        return self._payload
+
+
 def valid_row(**overrides: object) -> dict[object, object]:
     row: dict[object, object] = {
         "代码": "600000",
@@ -92,6 +111,79 @@ def valid_row(**overrides: object) -> dict[object, object]:
 
 def fixed_clock() -> datetime:
     return datetime(2026, 8, 28, 14, 30, tzinfo=MARKET_TIME_ZONE)
+
+
+def eastmoney_row(symbol: str) -> dict[str, object]:
+    return {
+        "f12": symbol,
+        "f14": f"测试{symbol}",
+        "f2": 10.25,
+        "f3": 1.5,
+        "f4": 0.15,
+        "f5": 123_456,
+        "f6": 1_234_567.89,
+        "f7": 2.1,
+        "f15": 10.4,
+        "f16": 10.1,
+        "f17": 10.2,
+        "f18": 10.1,
+        "f10": 1.2,
+        "f8": 0.8,
+        "f9": 6.5,
+        "f23": 0.7,
+        "f20": 300_000_000_000,
+        "f21": 290_000_000_000,
+    }
+
+
+def test_live_fetch_uses_delayed_endpoint_only_after_sdk_connection_failure() -> None:
+    fallback_frame = FakeFrame([valid_row()])
+    calls: list[str] = []
+
+    def unavailable_primary() -> object:
+        calls.append("primary")
+        raise RequestsConnectionError
+
+    def delayed_fallback() -> object:
+        calls.append("fallback")
+        return fallback_frame
+
+    result = _fetch_live_frame(
+        primary_fetcher=unavailable_primary,
+        delayed_fetcher=delayed_fallback,
+    )
+
+    assert result is fallback_frame
+    assert calls == ["primary", "fallback"]
+
+
+def test_delayed_endpoint_fallback_requires_complete_pagination() -> None:
+    calls: list[str] = []
+    delays: list[float] = []
+    payloads = {
+        "1": {"data": {"total": 3, "diff": [eastmoney_row("600000"), eastmoney_row("000001")]}},
+        "2": {"data": {"total": 3, "diff": [eastmoney_row("430047")]}},
+    }
+
+    def request(_url: str, *, params: dict[str, str], timeout: int) -> FakeHttpResponse:
+        assert timeout == 15
+        page = params["pn"]
+        calls.append(page)
+        return FakeHttpResponse(payloads[page])
+
+    frame = _fetch_live_frame_from_delayed_endpoint(
+        requester=request,
+        sleeper=delays.append,
+    )
+    provider = AkShareMarketDataProvider(fetcher=lambda: frame, clock=fixed_clock)
+
+    batch = provider.fetch_full_market_snapshot()
+
+    assert calls == ["1", "2"]
+    assert delays == [0.5]
+    assert batch.raw_record_count == 3
+    assert [record.symbol for record in batch.records] == ["600000", "000001", "430047"]
+    assert batch.provider_metadata["snapshot_transport"] == ("eastmoney_delayed_endpoint_fallback")
 
 
 def test_adapter_normalizes_provider_columns_without_leaking_them() -> None:
@@ -272,6 +364,71 @@ def test_adapter_normalizes_unadjusted_five_minute_bars_and_share_volume() -> No
     assert bar.provider == "akshare"
 
 
+def test_live_intraday_fetch_uses_sina_only_after_sdk_connection_failure() -> None:
+    request = IntradayBarRequest(
+        symbol="600000",
+        start_at=datetime(2026, 8, 28, 9, 30, tzinfo=MARKET_TIME_ZONE),
+        end_at=fixed_clock(),
+    )
+    fallback_frame = FakeFrame([], columns=INTRADAY_COLUMNS)
+    calls: list[str] = []
+
+    def unavailable_primary(_request: IntradayBarRequest) -> object:
+        calls.append("primary")
+        raise RequestsConnectionError
+
+    def fallback(_request: IntradayBarRequest) -> object:
+        calls.append("fallback")
+        return fallback_frame
+
+    result = _fetch_live_intraday_frame(
+        request,
+        primary_fetcher=unavailable_primary,
+        fallback_fetcher=fallback,
+    )
+
+    assert result is fallback_frame
+    assert calls == ["primary", "fallback"]
+
+
+def test_sina_intraday_fallback_filters_the_window_and_preserves_share_volume() -> None:
+    request = IntradayBarRequest(
+        symbol="600000",
+        start_at=datetime(2026, 8, 28, 9, 30, tzinfo=MARKET_TIME_ZONE),
+        end_at=fixed_clock(),
+    )
+    response_text = (
+        "callback=("
+        '[{"day":"2026-08-28 14:30:00","open":"10.20","high":"10.30",'
+        '"low":"10.18","close":"10.25","volume":"123457","amount":"1264850"},'
+        '{"day":"2026-08-28 14:35:00","open":"10.25","high":"10.35",'
+        '"low":"10.20","close":"10.30","volume":"100000","amount":"1030000"}]'
+        ");"
+    )
+    captured: list[tuple[str, dict[str, str], int]] = []
+
+    def requester(url: str, *, params: dict[str, str], timeout: int) -> FakeHttpResponse:
+        captured.append((url, params, timeout))
+        return FakeHttpResponse({}, text=response_text)
+
+    frame = _fetch_live_intraday_frame_from_sina(request, requester=requester)
+    provider = AkShareMarketDataProvider(
+        intraday_fetcher=lambda _: frame,
+        clock=fixed_clock,
+    )
+
+    batch = provider.fetch_intraday_bars(request)
+
+    assert captured[0][1]["symbol"] == "sh600000"
+    assert captured[0][1]["scale"] == "5"
+    assert captured[0][2] == 15
+    assert batch.raw_record_count == 1
+    assert batch.bars[0].ended_at == fixed_clock()
+    assert batch.bars[0].volume == 123_457
+    assert batch.provider_metadata["upstream"] == "Sina"
+    assert batch.provider_metadata["intraday_transport"] == "akshare_sina_fallback"
+
+
 def test_adapter_reports_malformed_intraday_rows_without_fabricating_bars() -> None:
     provider = AkShareMarketDataProvider(
         intraday_fetcher=lambda _: FakeFrame(
@@ -301,3 +458,49 @@ def test_adapter_reports_malformed_intraday_rows_without_fabricating_bars() -> N
     assert batch.bars == ()
     assert batch.raw_record_count == 1
     assert batch.normalization_issue_count == 1
+
+
+def test_intraday_cooldown_skips_failing_primary_and_probes_after_expiry() -> None:
+    request = IntradayBarRequest(
+        symbol="600000",
+        start_at=datetime(2026, 8, 28, 9, 30, tzinfo=MARKET_TIME_ZONE),
+        end_at=datetime(2026, 8, 28, 14, 30, tzinfo=MARKET_TIME_ZONE),
+    )
+    calls: list[str] = []
+    current = [100.0]
+    frame = FakeFrame([], columns=INTRADAY_COLUMNS)
+
+    def primary(_: IntradayBarRequest) -> object:
+        calls.append("primary")
+        if current[0] < 160:
+            raise RequestsConnectionError("unavailable")
+        return frame
+
+    def fallback(_: IntradayBarRequest) -> object:
+        calls.append("fallback")
+        return frame
+
+    fetch = _LiveIntradayFetcher(primary=primary, fallback=fallback, monotonic=lambda: current[0])
+    assert fetch(request) is frame
+    assert fetch(request) is frame
+    assert calls == ["primary", "fallback", "fallback"]
+    current[0] = 160
+    assert fetch(request) is frame
+    assert calls[-1] == "primary"
+
+
+def test_intraday_schema_failure_does_not_open_transport_cooldown() -> None:
+    request = IntradayBarRequest(
+        symbol="600000",
+        start_at=datetime(2026, 8, 28, 9, 30, tzinfo=MARKET_TIME_ZONE),
+        end_at=datetime(2026, 8, 28, 14, 30, tzinfo=MARKET_TIME_ZONE),
+    )
+
+    def malformed(_: IntradayBarRequest) -> object:
+        raise ValueError("schema drift")
+
+    def fallback(_: IntradayBarRequest) -> object:
+        pytest.fail("schema failures must not switch transport")
+
+    with pytest.raises(ValueError, match="schema drift"):
+        _LiveIntradayFetcher(primary=malformed, fallback=fallback)(request)

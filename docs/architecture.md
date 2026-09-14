@@ -1,5 +1,10 @@
 # Architecture
 
+Trend Radar adds the `trend_radar` feature boundary. A local Windows operator window or CLI starts
+scans; the website only reads exported JSON results. Local PostgreSQL owns evidence, schedule claims
+and scan locking. See [ADR 0016](adr/0016-trend-radar-local-control-static-publication.md) and
+[operations](trend-radar.md).
+
 ## System shape
 
 A-Stock Lab is a production-grade modular monolith. One backend package owns feature modules,
@@ -26,21 +31,26 @@ flowchart LR
   Intraday["Point-in-time intraday feature engine"] -->|"normalized 5-minute bars"| MarketData
   Intraday -->|"versioned feature artifacts"| Shared
   Intraday -->|"candidate provenance"| TailRadar
-  AIResearch["Point-in-time AI research service"] -->|"provider-neutral request"| OpenAIAdapter["OpenAI Responses adapter"]
+  AIResearch["BYOK single-candidate research"] -->|"provider-neutral request"| OpenAIAdapter["OpenAI Responses adapter"]
   OpenAIAdapter -->|"web search"| Web[(Public web sources)]
   AIResearch -->|"research artifact + source records"| Shared
   AIResearch -->|"candidate + deterministic evidence"| TailRadar
   Workflow["TailRadarApplicationService"] -->|"resume-safe orchestration"| Engine
   Workflow --> TailRadar
   Workflow --> Intraday
-  Workflow --> AIResearch
-  Internal["Future authenticated operations"] -.->|"separate internal boundary"| API
+  Worker["Separate Tail Radar worker"] -->|"14:30 Asia/Shanghai"| Workflow
+  Worker --> Calendar
+  Worker -->|"schedule state + advisory lock"| Postgres
+  Internal["Credential-gated internal operation"] -->|"one selected candidate"| AIResearch
+  Browser -.->|"explicit confirm + request-scoped user key"| Internal
 ```
 
 ## Backend boundaries
 
-- `api/` is an HTTP delivery layer. `/api/v1` is the public versioned surface. `api/internal` is a
-  reserved, unmounted boundary for future authenticated operational APIs.
+- `api/` is an HTTP delivery layer. `/api/v1` is the public read surface. `/api/internal/v1` is a
+  separate operational boundary; its current write surface requires a request-scoped user OpenAI
+  key, can start research for exactly one selected Tail Radar candidate, and cannot start a market
+  scan. This credential gates provider access but is not A-Stock Lab user authentication.
 - `features/<module>/domain` contains deterministic provider-independent rules and interfaces.
 - `features/<module>/application` coordinates use cases.
 - `features/<module>/adapters` contains concrete market-data, model, storage, and external service
@@ -52,9 +62,10 @@ flowchart LR
   modules never import those adapters.
 - `database` owns SQLAlchemy metadata and sessions. Alembic is the only schema evolution mechanism.
 
-Expensive actions such as market refreshes, OpenAI calls, quantitative runs, and Tail Radar execution
-must not be added as anonymous public actions. Authentication is intentionally deferred; therefore
-the operational router is not mounted.
+Expensive actions such as market refreshes, quantitative runs, and Tail Radar execution must not be
+added as anonymous public actions. The only mounted paid operation is single-candidate OpenAI
+research; it requires explicit cost confirmation and the caller's own request-scoped provider key.
+The site does not yet implement A-Stock Lab user authentication or authorization.
 
 The Phase 1 live diagnostic, Phase 2 point-in-time execution CLI, and Phase 3/4 Tail Radar CLI are
 explicitly invoked operations rather than API routes or schedulers. The snapshot execution engine
@@ -71,10 +82,19 @@ persisted candidate and eligible deterministic evidence, then delegates a provid
 to the OpenAI adapter. Only that adapter imports the SDK. It uses the Responses API, web search, and
 strict structured output; the deterministic screening and feature paths never import or invoke AI.
 The paid operation is CLI-only and claims its cache identity before making the external request.
-Phase 6 composes these services in `TailRadarApplicationService`. Its workflow lifecycle and
-per-candidate stage rows expose partial success and resumability without duplicating domain rules or
-provider adapters. Phase 7 consumes only public read APIs and presents raw market evidence,
-deterministic calculations, and AI interpretation as distinct visual layers.
+Phase 6 composes the deterministic services in `TailRadarApplicationService`. Workflow version 2
+stops after point-in-time intraday analysis and deliberately leaves AI research pending. AI runs
+only through the explicitly confirmed, single-candidate operation using the caller's transient
+OpenAI key and reuses the existing paid-call cache. Phase 7 consumes public read APIs for data and
+uses that separate internal operation only after user confirmation. It presents raw market evidence,
+deterministic calculations, and AI interpretation as distinct visual layers. Phase 8 runs a
+separate process from the same backend image. It uses `TradingCalendar`, persists the daily
+scheduling decision, and holds a PostgreSQL advisory lock while invoking the existing workflow.
+FastAPI processes do not import or start the scheduler. A configurable narrow initial start window
+preserves a missed 14:30 capture instead of backdating a later live request.
+
+The overview derives only reliable exchange-board classifications from normalized symbols. These
+support listing-board filtering and are not presented as industry classifications.
 
 ## Frontend boundaries
 
@@ -108,4 +128,5 @@ availability at the historical boundary.
 
 The backend emits JSON logs to standard output. Request middleware supplies `request_id`; run
 orchestration can attach `run_id`, while feature and provider context are structured log fields.
-Secrets and raw credentials must never be logged.
+Secrets and raw credentials must never be logged. A browser-supplied OpenAI key exists only in page
+memory and the request-scoped backend adapter; it is not persisted or returned.

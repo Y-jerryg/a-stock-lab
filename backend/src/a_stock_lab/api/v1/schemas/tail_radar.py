@@ -21,8 +21,13 @@ from a_stock_lab.features.tail_radar.application.query_models import (
 from a_stock_lab.features.tail_radar.application.research_models import TailRadarResearchData
 from a_stock_lab.features.tail_radar.domain.research import TailRadarResearchClaim
 from a_stock_lab.shared.execution.models import RunStatus
-from a_stock_lab.shared.market_data.models import AShareExchange, SnapshotQualityReport
+from a_stock_lab.shared.market_data.models import (
+    AShareBoard,
+    AShareExchange,
+    SnapshotQualityReport,
+)
 from a_stock_lab.shared.market_data.persistence_schemas import PersistedSnapshotManifest
+from a_stock_lab.shared.market_data.symbols import infer_a_share_board
 
 
 class TailRadarRuleConfigurationResponse(BaseModel):
@@ -76,11 +81,15 @@ class TailRadarCandidateSummaryResponse(BaseModel):
     snapshot_id: UUID
     symbol: str
     exchange: AShareExchange | None
+    board: AShareBoard | None
     name: str | None
     price: float
     pct_change: float
     amount: float | None
     turnover_rate: float | None
+    amplitude: float | None
+    volume_ratio: float | None
+    float_market_cap: float | None
     as_of: AwareDatetime
     screening_rule_version: str
     intraday_position: float | None = None
@@ -104,11 +113,15 @@ class TailRadarCandidateSummaryResponse(BaseModel):
             snapshot_id=data.snapshot_id,
             symbol=data.symbol,
             exchange=record.exchange,
+            board=infer_a_share_board(record.symbol, record.exchange),
             name=record.name,
             price=record.price,
             pct_change=record.pct_change,
             amount=record.amount,
             turnover_rate=record.turnover_rate,
+            amplitude=record.amplitude,
+            volume_ratio=record.volume_ratio,
+            float_market_cap=record.float_market_cap,
             as_of=data.as_of,
             screening_rule_version=data.payload.screening_rule_version,
         )
@@ -144,6 +157,14 @@ class TailRadarCandidateListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class TailRadarOnDemandResearchAvailabilityResponse(BaseModel):
+    enabled: bool
+    model_identifier: str
+    one_candidate_per_request: Literal[True] = True
+    requires_user_api_key: Literal[True] = True
+    automatic_batch_research: Literal[False] = False
 
 
 class TailRadarWorkflowResponse(BaseModel):
@@ -515,6 +536,7 @@ class TailRadarCandidateDetailResponse(BaseModel):
     run_id: UUID
     snapshot_id: UUID
     symbol: str
+    board: AShareBoard | None
     trade_date: date
     as_of: AwareDatetime
     screening_rule_version: str
@@ -544,6 +566,10 @@ class TailRadarCandidateDetailResponse(BaseModel):
             run_id=data.run_id,
             snapshot_id=data.snapshot_id,
             symbol=data.symbol,
+            board=infer_a_share_board(
+                payload.snapshot_record.symbol,
+                payload.snapshot_record.exchange,
+            ),
             trade_date=data.trade_date,
             as_of=data.as_of,
             screening_rule_version=payload.screening_rule_version,

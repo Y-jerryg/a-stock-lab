@@ -201,14 +201,11 @@ def test_cli_executes_and_resumes_complete_workflow_explicitly(
             )
             return FakeWorkflowResult()
 
-        def resume(
-            self, *, workflow_run_id: UUID, retry_failed_research: bool
-        ) -> FakeWorkflowResult:
+        def resume(self, *, workflow_run_id: UUID) -> FakeWorkflowResult:
             captured.append(
                 {
                     "operation": "resume",
                     "workflow_run_id": workflow_run_id,
-                    "retry_failed_research": retry_failed_research,
                 }
             )
             return FakeWorkflowResult()
@@ -235,7 +232,6 @@ def test_cli_executes_and_resumes_complete_workflow_explicitly(
             "resume",
             "--workflow-run-id",
             str(WORKFLOW_ID),
-            "--retry-failed-research",
         ]
     )
     resume_payload = json.loads(capsys.readouterr().out)
@@ -248,5 +244,4 @@ def test_cli_executes_and_resumes_complete_workflow_explicitly(
     assert captured[1] == {
         "operation": "resume",
         "workflow_run_id": WORKFLOW_ID,
-        "retry_failed_research": True,
     }

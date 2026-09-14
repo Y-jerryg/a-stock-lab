@@ -70,10 +70,13 @@ GET /api/v1/tail-radar/runs/{run_id}
 GET /api/v1/tail-radar/runs/{run_id}/summary
 GET /api/v1/tail-radar/runs/{run_id}/candidates?page=1&page_size=50
 GET /api/v1/tail-radar/candidates/{candidate_id}
+GET /api/v1/tail-radar/research-availability
 ```
 
 Run and candidate collections are paginated with bounded page sizes. Candidate detail exposes the
 explanatory evidence; server-local Parquet storage keys stay in snapshot-manifest infrastructure.
+The research-availability response exposes only safe capability flags and the requested model name;
+it never returns an API key.
 There is no public POST or other
 route that executes screening or fetches live market data.
 
@@ -114,10 +117,16 @@ intraday analysis; no public route executes it.
 
 ## Phase 5 point-in-time web research
 
-`tail-radar-research-v1` researches one persisted candidate through a provider-neutral application
+`tail-radar-research-v2` researches one persisted candidate through a provider-neutral application
 contract. The OpenAI adapter is the only code that imports the official SDK. It uses the Responses
 API with web search and a strict Pydantic output schema. Screening and intraday features remain
 deterministic and neither depend on nor change because of AI output.
+
+Version 2 requires all narrative research fields to use Simplified Chinese for direct display in
+the public interface. Authentic source titles, URLs, stock symbols, company names, proper nouns,
+model identifiers, and version identifiers remain unmodified when translation would weaken source
+attribution. The prompt-version change gives Chinese results a distinct paid-call cache identity;
+historical version 1 artifacts remain immutable and reproducible.
 
 Every request has an aware `analysis_as_of`. The prompt explicitly prohibits treating information
 published later as evidence known at that time. The application validates URLs against sources
@@ -159,18 +168,17 @@ request, and no public route starts research. Candidate detail exposes the lates
 no-evidence research and its sources; private provider response IDs, token accounting, and raw
 provider metadata stay backend-side.
 
-## Phase 6 complete application workflow
+## Phase 6 application workflow and on-demand AI policy
 
-`TailRadarApplicationService` composes the existing official snapshot execution, quality gate,
-screening, candidate persistence, intraday analysis, and web-research services. It adds lifecycle
-orchestration only; every underlying rule and provider boundary remains authoritative in its
-existing service.
+`TailRadarApplicationService` version `tail-radar-workflow-v2` composes official snapshot
+execution, quality validation, screening, candidate persistence, and intraday analysis. It never
+loops over candidates to call OpenAI. Every candidate starts with research status `pending`; that is
+an optional follow-up and does not prevent a deterministic workflow from succeeding.
 
 The workflow states are `claimed`, `snapshot_running`, `screening_running`,
 `candidate_analysis_running`, `succeeded`, `partial_success`, and `failed`. Each candidate separately
 records technical and research stage state. One candidate provider failure does not roll back other
-candidates. Resume skips successful technical artifacts and successful/no-evidence AI research.
-Failed AI work is retried only with an explicit paid flag.
+candidates. Resume skips successful technical artifacts and does not start AI work.
 
 ```powershell
 uv run tail-radar workflow `
@@ -178,11 +186,6 @@ uv run tail-radar workflow `
 
 uv run tail-radar resume `
   --workflow-run-id <workflow-run-uuid>
-
-# Explicitly creates paid forced attempts only for previously failed candidate research:
-uv run tail-radar resume `
-  --workflow-run-id <workflow-run-uuid> `
-  --retry-failed-research
 ```
 
 The optional `--analysis-as-of` fixes a later explicit boundary. If omitted, the workflow fixes the
@@ -190,10 +193,84 @@ boundary after screening. All public routes remain GET-only. Run summary exposes
 counts, quality and workflow completion; candidate collections expose overview features and stage
 status; candidate detail exposes used bars, versions, research claims and separate source records.
 
+Candidate intraday analysis uses `TAIL_RADAR_INTRADAY_WORKERS` (default 4, range 1–8). Snapshot and
+screening remain sequential; every candidate retains the fixed `analysis_as_of`. A primary
+intraday network failure starts a 60-second transport cooldown using the existing fallback.
+See [ADR 0017](adr/0017-bounded-tail-radar-intraday-concurrency.md). The browser polls unfinished
+stages with GET requests and never automatically retries a paid POST.
+
+The supplied Nginx proxy waits 330 seconds for research, covering the maximum configurable
+300-second backend timeout. HTML is not cached and missing asset files return 404. A failed lazy
+page import displays a refresh action instead of blanking the app; refreshing makes no paid call.
+
+Loading the page or opening a candidate detail never calls OpenAI. With backend on-demand research
+enabled, the detail page accepts the user's own OpenAI API key, requires an explicit cost
+confirmation, and submits exactly one candidate to:
+
+```text
+POST /api/internal/v1/tail-radar/candidates/{candidate_id}/research
+```
+
+The backend derives `analysis_as_of` from the workflow. Successful/no-evidence research is cached;
+a failed attempt requires an explicit paid retry. The key stays in page memory, is sent in the
+`X-OpenAI-API-Key` header, and must never be stored in `VITE_*`, a URL, logs, the database, or
+browser storage. The backend creates a request-scoped OpenAI adapter and discards the key after the
+request. A non-local deployment must use HTTPS, and users must trust the backend operator.
+
+The overview offers an “上市板块” filter derived from normalized symbol and exchange evidence:
+沪市主板、深市主板、创业板、科创板、北交所. This is not an industry classification. Unknown
+families remain unavailable rather than receiving a fabricated label.
+
 ## Phase 7 public frontend
 
 The Tail Radar hash route renders the latest persisted run, metrics, completion state and a sortable,
 searchable, filterable, paginated candidate table. Candidate detail clearly labels raw snapshot
 evidence, deterministic intraday calculations, and AI interpretation. The ECharts series uses only
 persisted used bars. Missing values remain `—` or an explicit empty state. Source links open their
-original URLs; the browser never receives `OPENAI_API_KEY` and cannot start a workflow.
+original URLs. The browser never receives a site-owned `OPENAI_API_KEY` and cannot start a market
+workflow; a user-entered key exists only in the BYOK form's memory for one candidate request.
+
+## Phase 8 official 14:30 worker
+
+The recurring scheduler is a separate backend-image process, never a FastAPI background task. On a
+provider-confirmed A-share trading day it targets exactly `14:30:00 Asia/Shanghai`. The schedule
+record preserves that intended time; snapshot manifests separately preserve the real provider fetch
+start and finish. The default initial-start tolerance is 30 seconds. If no official workflow was
+claimed within that window, the worker persists `missed` and will not call a live provider later as
+if it were the 14:30 observation.
+
+A default 60-second preflight resolves the trading calendar, verifies database persistence,
+confirms the normalized provider advertises snapshot and intraday capabilities, and reports backend
+OpenAI/BYOK availability. It does not make an early full-market request. Missing OpenAI configuration
+does not degrade or block deterministic capture; it only disables the optional single-candidate
+research action.
+
+PostgreSQL provides three layers of safety: one schedule row per logical day, a connection-scoped
+advisory execution lock, and the existing unique official workflow/snapshot identities. A restart
+can resume an existing nonterminal workflow after the dead connection releases its lock. The worker
+makes no OpenAI calls. Existing completed/no-evidence research remains reusable, and failed paid
+attempts are not automatically repeated.
+
+Operational commands from `backend/` are:
+
+```powershell
+# Long-running process used by the Compose worker service
+uv run tail-radar worker
+
+# One immediate scheduling decision, useful for liveness/diagnosis without a real-time wait
+uv run tail-radar worker-once
+
+uv run tail-radar scheduled-status
+uv run tail-radar scheduled-status --trade-date 2026-08-31
+
+# Analysis-only recovery is allowed only if an official snapshot was already captured
+uv run tail-radar scheduled-retry --trade-date 2026-08-31
+
+uv run tail-radar worker-health --max-age-seconds 30
+```
+
+The existing `tail-radar workflow --intended-snapshot-time ...` remains the manual complete
+diagnostic. `market-snapshot execute-at ... --force` creates an explicitly non-official live
+snapshot, and `tail-radar research ... --force` creates an explicitly forced paid research attempt.
+Neither replaces an official missed or failed 14:30 capture. Public APIs and the frontend remain
+read-only and expose none of these controls.

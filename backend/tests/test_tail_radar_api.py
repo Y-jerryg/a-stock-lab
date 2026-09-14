@@ -5,7 +5,9 @@ from uuid import UUID
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from a_stock_lab.api.internal.services.tail_radar import get_on_demand_research_service
 from a_stock_lab.api.v1.services.tail_radar import get_tail_radar_query_service
+from a_stock_lab.core.config import Settings, get_settings
 from a_stock_lab.core.time import MARKET_TIME_ZONE
 from a_stock_lab.features.tail_radar.application.intraday_models import (
     TailRadarIntradayAnalysisData,
@@ -17,6 +19,9 @@ from a_stock_lab.features.tail_radar.application.models import (
     TailRadarCandidatePayload,
     TailRadarRunData,
     TailRadarRunPage,
+)
+from a_stock_lab.features.tail_radar.application.on_demand_research_service import (
+    TailRadarOnDemandResearchService,
 )
 from a_stock_lab.features.tail_radar.application.orchestration_models import (
     TAIL_RADAR_WORKFLOW_VERSION,
@@ -31,7 +36,9 @@ from a_stock_lab.features.tail_radar.application.query_models import (
 from a_stock_lab.features.tail_radar.application.research_models import (
     ResearchTokenUsage,
     TailRadarResearchData,
+    TailRadarResearchDisposition,
     TailRadarResearchPayload,
+    TailRadarResearchResult,
     TailRadarResearchStatus,
 )
 from a_stock_lab.features.tail_radar.domain.intraday import (
@@ -422,9 +429,11 @@ def test_public_candidate_reads_preserve_explanatory_snapshot_evidence(
     assert candidates.status_code == 200
     assert candidates.json()["items"][0]["pct_change"] == 2.5
     assert candidates.json()["items"][0]["price"] == 10.25
+    assert candidates.json()["items"][0]["board"] == "shanghai_main"
     assert detail.status_code == 200
     payload = detail.json()
     assert payload["snapshot_data"]["symbol"] == "600000"
+    assert payload["board"] == "shanghai_main"
     assert payload["snapshot_data"]["pct_change"] == 2.5
     assert payload["decision"] == {
         "outcome": "included",
@@ -447,7 +456,7 @@ def test_public_candidate_reads_preserve_explanatory_snapshot_evidence(
     research = payload["web_research"]
     assert research["status"] == "no_evidence"
     assert research["evidence_quality"] == "insufficient"
-    assert research["prompt_version"] == "tail-radar-research-v1"
+    assert research["prompt_version"] == "tail-radar-research-v2"
     assert "provider_response_id" not in research
     assert "token_usage" not in research
 
@@ -476,3 +485,57 @@ def test_public_tail_radar_reads_return_typed_not_found_errors(
     assert run_response.json()["error"]["code"] == "tail_radar_run_not_found"
     assert candidate_response.status_code == 404
     assert candidate_response.json()["error"]["code"] == "tail_radar_candidate_not_found"
+
+
+def test_on_demand_research_requires_user_key_and_targets_one_candidate(app: FastAPI) -> None:
+    class FakeOnDemandService:
+        def __init__(self) -> None:
+            self.calls: list[tuple[UUID, bool]] = []
+
+        def execute(self, *, candidate_id: UUID, retry_failed: bool) -> TailRadarResearchResult:
+            self.calls.append((candidate_id, retry_failed))
+            return TailRadarResearchResult(
+                disposition=TailRadarResearchDisposition.CACHED,
+                research=research_data(),
+            )
+
+    settings = Settings(
+        tail_radar_on_demand_research_enabled=True,
+    )
+    fake = FakeOnDemandService()
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_on_demand_research_service] = lambda: cast(
+        TailRadarOnDemandResearchService,
+        fake,
+    )
+    with TestClient(app) as test_client:
+        availability = test_client.get("/api/v1/tail-radar/research-availability")
+        unauthorized = test_client.post(
+            f"/api/internal/v1/tail-radar/candidates/{CANDIDATE_ID}/research",
+            json={"confirmed": True, "retry_failed": False},
+        )
+        not_confirmed = test_client.post(
+            f"/api/internal/v1/tail-radar/candidates/{CANDIDATE_ID}/research",
+            headers={"X-OpenAI-API-Key": "test-user-api-key"},
+            json={"confirmed": False, "retry_failed": False},
+        )
+        authorized = test_client.post(
+            f"/api/internal/v1/tail-radar/candidates/{CANDIDATE_ID}/research",
+            headers={"X-OpenAI-API-Key": "test-user-api-key"},
+            json={"confirmed": True, "retry_failed": False},
+        )
+
+    assert availability.status_code == 200
+    assert availability.json() == {
+        "enabled": True,
+        "model_identifier": "gpt-5.6-sol",
+        "one_candidate_per_request": True,
+        "requires_user_api_key": True,
+        "automatic_batch_research": False,
+    }
+    assert unauthorized.status_code == 401
+    assert unauthorized.json()["error"]["code"] == "tail_radar_user_api_key_required"
+    assert not_confirmed.status_code == 422
+    assert authorized.status_code == 200
+    assert authorized.json()["candidate_id"] == str(CANDIDATE_ID)
+    assert fake.calls == [(CANDIDATE_ID, False)]

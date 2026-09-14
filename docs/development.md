@@ -32,7 +32,8 @@ For the hot-reload development stack, run:
 ```
 
 The development override mounts source code, enables FastAPI reload, runs Vite, persists PostgreSQL
-in a named volume, and bind-mounts `runtime/` for immutable market datasets. Stop it with:
+in a named volume, and bind-mounts `runtime/` for immutable market datasets. A one-shot `migrate`
+service completes Alembic before either API or worker starts. Stop the stack with:
 
 ```powershell
 ./scripts/dev.ps1 -Stop
@@ -112,7 +113,7 @@ uv run market-snapshot inspect --run-id <run-uuid>
 Use `--force` only for an explicit non-official rerun. A failed or successful official identity is
 otherwise replayed idempotently without another network call. The trading calendar is provider data;
 the engine never treats an ordinary weekday rule as sufficient evidence of a trading day. There is
-no recurring scheduler.
+a separate recurring worker; these commands remain explicit diagnostics.
 
 ## Manual Tail Radar screening
 
@@ -129,10 +130,27 @@ uv run tail-radar inspect --run-id <tail-radar-run-uuid>
 Repeating the same snapshot under `tail-radar-screen-v1` returns the existing run. Public APIs are
 read-only and cannot execute this command. See [Tail Radar documentation](tail-radar.md).
 
-## Manual OpenAI research diagnostic
+## On-demand OpenAI research
 
-Normal development, CI, and tests do not need an OpenAI key. To make one deliberate paid research
-request, set a newly generated `OPENAI_API_KEY` only in the root `.env`, apply migrations, and run:
+Normal development, CI, capture, screening, and deterministic analysis do not need an OpenAI key.
+To enable the detail-page action, set only the feature flag in the ignored root `.env`:
+
+```dotenv
+OPENAI_RESEARCH_MODEL=gpt-5.6-sol
+TAIL_RADAR_ON_DEMAND_RESEARCH_ENABLED=true
+```
+
+Restart the backend after changing `.env`. Open one candidate, enter your own OpenAI API key, check
+the cost confirmation, and click “确认并分析当前股票”. Loading the page does not call OpenAI. The key
+stays in that component's memory, is sent once in `X-OpenAI-API-Key`, and must never be placed in
+`VITE_*`, the URL, logs, or browser storage. The backend creates a request-scoped provider and does
+not persist or return the key. The endpoint accepts exactly one candidate per request. Outside
+loopback development, the frontend and API must use HTTPS and the user must trust the backend.
+
+`OPENAI_API_KEY` remains optional and is used only by the backend CLI diagnostic below. It is not
+required and is ignored by the browser BYOK flow.
+
+The CLI remains available for a deliberate single-candidate diagnostic:
 
 ```powershell
 Set-Location backend
@@ -142,17 +160,16 @@ uv run tail-radar research `
   --analysis-as-of "2026-08-28T14:35:00+08:00"
 ```
 
-Do not pass keys on the command line and never use `VITE_*` for secrets. The command analyzes one
-candidate, prints structured JSON, and is not exposed by public HTTP routes. Identical attempts are
+Do not pass keys on the command line and never use `VITE_*` for secrets. Identical attempts are
 cached before the external call; `--force` deliberately creates another paid attempt. Provider
 timeouts, rate limits, API errors, invalid structured output, and no-evidence results remain local
 to that candidate and do not change the Tail Radar run.
 
-## Complete Tail Radar workflow
+## Deterministic Tail Radar workflow
 
-Apply migrations before the first complete run. The workflow intentionally combines live market
-data and paid AI research, so use it only with a valid local `.env` and during an intended A-share
-snapshot window:
+Apply migrations before the first complete run. Workflow version 2 combines live market data,
+quality validation, screening, and deterministic intraday analysis. It deliberately makes zero
+OpenAI calls, regardless of candidate count:
 
 ```powershell
 Set-Location backend
@@ -164,9 +181,42 @@ uv run tail-radar resume `
   --workflow-run-id <workflow-run-uuid>
 ```
 
-Resume reuses completed snapshot, screening, technical, and paid research work. A failed AI attempt
-is also cached and is retried only when `--retry-failed-research` is supplied deliberately. Public
-HTTP routes and the frontend remain read-only; neither can start live or paid execution.
+Resume reuses completed snapshot, screening, and technical work. AI remains pending until a user
+explicitly confirms one candidate in its detail page. Public `/api/v1` routes remain read-only; the
+single paid action lives under the separate `/api/internal/v1` operational boundary and requires a
+request-scoped user OpenAI key.
+
+## Scheduled worker operations
+
+Compose starts `worker` as a separate service from the same backend image after the one-shot
+`migrate` service has applied migrations. The worker writes liveness to
+`runtime/worker/tail-radar-heartbeat.json` and handles SIGTERM/SIGINT. FastAPI does not host the
+scheduler. Useful PowerShell commands are:
+
+```powershell
+docker compose ps worker
+docker compose exec worker tail-radar worker-health --max-age-seconds 30
+docker compose exec worker tail-radar scheduled-status
+docker compose logs --tail 100 worker
+
+# Native backend equivalents
+Set-Location backend
+uv run tail-radar worker-once
+uv run tail-radar scheduled-status
+uv run tail-radar scheduled-retry --trade-date 2026-08-31
+```
+
+The official intended slot is fixed at 14:30:00 Asia/Shanghai. The checked-in defaults preflight 60
+seconds earlier, poll every five seconds, and allow an initial start at most 30 seconds late. A later
+startup is persisted as `missed`; it does not fetch a live snapshot. Preflight checks the provider
+calendar and declared market capabilities but intentionally avoids a second full-market request.
+
+If an official snapshot was captured before a later technical failure, `scheduled-retry` resumes
+incomplete deterministic analysis and reuses success. It never starts AI research. If the snapshot
+provider failed or the slot was missed, an official
+retry is impossible because a later live response cannot reproduce 14:30. Operators may use the
+existing `market-snapshot ... --force` and `tail-radar research ... --force` diagnostics, but those
+outputs stay explicitly non-official/forced.
 
 ## Adding work
 

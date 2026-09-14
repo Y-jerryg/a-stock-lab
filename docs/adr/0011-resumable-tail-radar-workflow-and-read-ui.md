@@ -3,6 +3,10 @@
 - Status: Accepted
 - Date: 2026-08-31
 
+The batch-AI workflow decision in this record is superseded by
+[ADR 0013](0013-authenticated-on-demand-tail-radar-research.md). Historical v1 records retain the
+semantics described here.
+
 ## Context
 
 Tail Radar's snapshot, deterministic screening, intraday analysis, and paid web-research services

@@ -1,0 +1,308 @@
+.trend-page {
+  display: grid;
+  gap: 1.25rem;
+  font-size: 0.875rem;
+}
+.trend-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 1rem;
+}
+.trend-heading h1 {
+  font-size: 1.6rem;
+  font-weight: 700;
+}
+.trend-heading p,
+.trend-page dt {
+  color: var(--text-muted);
+}
+.trend-page h2 {
+  font-size: 1.05rem;
+  font-weight: 650;
+}
+.trend-page select {
+  display: block;
+  background: var(--surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  padding: 0.65rem;
+  min-height: 44px;
+  width: 100%;
+}
+.trend-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+.trend-summary > div,
+.trend-stock,
+.trend-explanation {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 1.2rem;
+}
+.trend-summary span {
+  color: var(--text-muted);
+  display: block;
+}
+.trend-summary strong {
+  display: block;
+  font-size: 1.5rem;
+  margin-top: 0.5rem;
+}
+.trend-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+  gap: 1rem;
+}
+.trend-stock header {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 0.5rem;
+}
+.trend-stock header span {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.trend-stock.trend-strong {
+  border-color: #139b80;
+  border-top-width: 4px;
+}
+.trend-badge {
+  border-radius: 1rem;
+  padding: 0.25rem 0.6rem;
+  background: var(--surface-hover);
+  font-size: 0.75rem;
+}
+.trend-strong .trend-badge {
+  color: #087961;
+  background: #d1fae5;
+}
+.trend-page dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.85rem;
+  margin-top: 1rem;
+}
+.trend-page dd {
+  margin-top: 0.15rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.trend-page summary {
+  cursor: pointer;
+  padding: 1rem 0 0.25rem;
+  color: var(--text-muted);
+}
+.trend-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: end;
+}
+.trend-filters label {
+  flex: 1;
+  min-width: 130px;
+}
+.trend-explanation {
+  line-height: 1.9;
+}
+.trend-notice {
+  border-left: 3px solid #d79822;
+  padding: 0.75rem;
+}
+.trend-page summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.trend-stock-name:hover,
+.trend-back:hover {
+  color: var(--accent);
+}
+.trend-stock-name:focus-visible,
+.trend-detail-link:focus-visible,
+.trend-back:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+.trend-detail-link {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 1.2rem;
+  padding: 0.7rem 0.85rem;
+  min-height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  color: var(--accent);
+}
+.trend-detail-link:hover {
+  background: var(--surface-hover);
+}
+.trend-detail-page {
+  min-width: 0;
+}
+.trend-back {
+  color: var(--text-muted);
+  width: fit-content;
+  padding: 0.4rem 0;
+}
+.trend-eyebrow {
+  margin-bottom: 0.5rem;
+  font-size: 0.75rem;
+}
+.trend-symbol {
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+.trend-detail-page .trend-heading p {
+  margin-top: 0.4rem;
+}
+.trend-quote {
+  display: grid;
+  text-align: right;
+  gap: 0.2rem;
+  font-variant-numeric: tabular-nums;
+}
+.trend-quote strong {
+  font-size: 2.1rem;
+  line-height: 1.2;
+}
+.trend-quote small {
+  color: var(--text-muted);
+}
+.trend-up {
+  color: #ef5350;
+}
+.trend-down {
+  color: #15b887;
+}
+.trend-detail-panel {
+  min-width: 0;
+  padding: 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--surface);
+}
+.trend-detail-page .trend-detail-metrics {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 0;
+  row-gap: 1.3rem;
+}
+.trend-detail-metrics dd {
+  font-size: 1.05rem;
+  overflow-wrap: anywhere;
+}
+.trend-panel-heading {
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  align-items: start;
+}
+.trend-panel-heading p {
+  margin-top: 0.3rem;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+.trend-daily-chart,
+.trend-chart-loading {
+  height: 460px;
+  width: 100%;
+  margin-top: 0.6rem;
+}
+.trend-chart-loading {
+  display: grid;
+  place-items: center;
+}
+.trend-chart-hint,
+.trend-evidence p {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1.8;
+}
+.trend-detail-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+.trend-detail-columns .trend-detail-metrics {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 1.1rem;
+}
+.trend-daily-table > summary {
+  padding-top: 0;
+  color: var(--text-primary);
+}
+.trend-table-scroll {
+  max-height: 450px;
+  overflow: auto;
+  margin-top: 1rem;
+}
+.trend-daily-table table {
+  width: 100%;
+  border-collapse: collapse;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.trend-daily-table caption {
+  text-align: left;
+  color: var(--text-muted);
+  margin-bottom: 0.75rem;
+  font-size: 0.75rem;
+}
+.trend-daily-table td,
+.trend-daily-table th {
+  text-align: right;
+  padding: 0.65rem 0.85rem;
+  border-bottom: 1px solid var(--border);
+}
+.trend-daily-table th:first-child {
+  text-align: left;
+}
+.trend-daily-table thead th {
+  color: var(--text-muted);
+  background: var(--surface-hover);
+  position: sticky;
+  top: 0;
+}
+.trend-window-row {
+  background: rgba(120, 155, 255, 0.07);
+}
+.trend-evidence h2 {
+  margin-bottom: 0.6rem;
+}
+@media (max-width: 600px) {
+  .trend-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .trend-heading {
+    flex-direction: column;
+  }
+  .trend-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .trend-detail-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .trend-detail-page .trend-detail-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .trend-quote {
+    text-align: left;
+  }
+  .trend-daily-chart,
+  .trend-chart-loading {
+    height: 390px;
+  }
+  .trend-detail-panel {
+    padding: 0.9rem;
+  }
+  .trend-panel-heading {
+    flex-wrap: wrap;
+  }
+}

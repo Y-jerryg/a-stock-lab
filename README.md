@@ -1,5 +1,16 @@
 # A-Stock Lab
 
+Trend Radar is available as an independent daily Top-300 attention / 9–8–7-session decline /
+volume-contraction feature. It uses local PostgreSQL, a Windows operator window for scans, and
+a Chinese read-only website backed by exported static results. No Supabase account is required.
+See [Trend Radar setup and operations](docs/trend-radar.md) and
+[ADR 0016](docs/adr/0016-trend-radar-local-control-static-publication.md).
+The [verification record](docs/trend-radar-verification.md) lists checks actually run and deployment
+steps that still require configured infrastructure.
+
+中文入口：[本机使用与网站分享](docs/usage-and-sharing.md)。最新修复和真实全量扫描结果见
+[趋势雷达修复验证](docs/trend-radar-repair-2026-09-13.md)。
+
 A-Stock Lab is a production-oriented personal A-share market research platform. Phase 0 established
 the modular monolith, database contracts, runtime, observability, frontend shell, and delivery
 tooling. Phase 1 adds provider-neutral market-data infrastructure, an isolated AKShare adapter,
@@ -9,7 +20,9 @@ and idempotent official-run semantics. Phase 3 adds the deterministic, point-in-
 `tail-radar-screen-v1` rule, auditable candidate artifacts, and public read-only result APIs. Phase 4
 adds versioned point-in-time intraday features without a trading score or prediction. Phase 5 adds
 backend-only, point-in-time OpenAI web research with separately persisted sources and paid-call
-idempotency. It deliberately contains no recurring scheduler or simulated results.
+idempotency. Phases 6 and 7 add resumable orchestration and the evidence-separated read UI. Phase 8
+adds a separate database-coordinated 14:30 Asia/Shanghai worker. The platform never uses simulated
+financial results.
 
 ## Modules
 
@@ -76,6 +89,12 @@ Only public configuration belongs in `VITE_*`. Set `VITE_API_BASE_URL` to the se
 origin for static production hosting and `VITE_BASE_PATH` to the GitHub Pages repository path (for
 example `/a-stock-lab/`). Hash routing keeps direct navigation reliable on static hosts.
 
+The separate [GitHub Pages workflow](.github/workflows/pages.yml) derives the Pages base path,
+requires the repository Actions variable `VITE_API_BASE_URL`, validates the browser bundle, and
+deploys only `frontend/dist`. Configure **Settings → Pages → Build and deployment → Source → GitHub
+Actions**. The repository intentionally contains no production backend URL; see
+[GitHub Pages deployment](docs/github-pages.md).
+
 ## Database migrations
 
 ```powershell
@@ -85,8 +104,9 @@ uv run alembic revision --autogenerate -m "describe change"
 uv run alembic downgrade -1
 ```
 
-Every schema change must include and review an Alembic migration. Containers apply committed
-migrations on startup only after PostgreSQL reports healthy.
+Every schema change must include and review an Alembic migration. Local Compose runs one one-shot
+`migrate` service after PostgreSQL is healthy; API and worker start only after it succeeds, avoiding
+concurrent migration runners. Production should keep migration as an explicit release step.
 
 ## Manual live market-data diagnostic
 
@@ -163,7 +183,7 @@ including a failed or no-evidence attempt, without another paid call. Use `--for
 paid attempt is intentional. Normal tests mock OpenAI and never use the network. See
 [Tail Radar documentation](docs/tail-radar.md) for timestamp and source-integrity rules.
 
-## Complete Tail Radar workflow and UI
+## Deterministic workflow, UI, and on-demand AI
 
 After applying the latest migration, an internal operator can execute or resume the complete
 point-in-time workflow:
@@ -176,11 +196,36 @@ uv run tail-radar workflow `
 uv run tail-radar resume --workflow-run-id <workflow-run-uuid>
 ```
 
-Resume skips completed deterministic work and completed or no-evidence paid research. Retrying a
-failed paid attempt requires the explicit `--retry-failed-research` flag. The Tail Radar browser UI
-is read-only and uses hash routes, preserving static GitHub Pages compatibility. It renders only
-persisted snapshot evidence, deterministic calculations, and separately labelled AI interpretation;
-it never starts a scan or receives backend secrets.
+Workflow version 2 runs the official snapshot, screening, and deterministic intraday analysis only.
+It never batches OpenAI calls, so the first run costs no OpenAI fees regardless of candidate count.
+The Tail Radar browser uses hash routes, preserving static GitHub Pages compatibility. It presents
+snapshot evidence in a board-filterable table with activity, size, and intraday fields.
+
+Optional AI research begins only after a user opens one candidate, enters their own OpenAI API key,
+checks the cost confirmation, and submits that one stock. The site only needs
+`TAIL_RADAR_ON_DEMAND_RESEARCH_ENABLED=true`; the request-scoped key stays in page memory, passes
+through the backend, and is never persisted. Never place a key in `VITE_*`. Successful identical
+research is served from cache, while a failed attempt requires a separate explicit retry
+confirmation. Non-local deployments must use HTTPS and a trusted backend.
+
+## Official 14:30 worker
+
+Docker Compose runs the scheduler as a separate `worker` service using the backend image; FastAPI
+does not run background scheduling. The worker consults the provider-neutral trading calendar,
+preflights shortly before 14:30, and stores `missed` if it cannot begin the official live capture
+within the configured 30-second window.
+
+```powershell
+docker compose ps worker
+docker compose exec worker tail-radar scheduled-status
+docker compose exec worker tail-radar worker-health --max-age-seconds 30
+docker compose logs --tail 100 worker
+```
+
+Database uniqueness and an advisory lock prevent duplicate official execution. A restart resumes
+nonterminal deterministic work without making paid research calls. Analysis can be retried only when an
+official snapshot exists; a missed or failed initial capture cannot be reconstructed from a later
+live response. Operational commands remain backend-only and are not exposed by the public API or UI.
 
 ## Quality commands
 

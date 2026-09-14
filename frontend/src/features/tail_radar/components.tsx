@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { Badge } from '../../components/ui/badge';
 import { cn } from '../../lib/utils';
 import type { StageStatus, WorkflowLifecycle } from './api';
+import { formatStatus } from './format';
 
 export function SectionLabel({
   tone,
@@ -30,30 +31,30 @@ export function SectionLabel({
 }
 
 export function StageBadge({ status }: { status: StageStatus | null }) {
-  if (!status) return <Badge variant="neutral">Unavailable</Badge>;
+  if (!status) return <Badge variant="neutral">暂不可用</Badge>;
   const variant =
     status === 'succeeded' || status === 'no_evidence'
       ? 'ready'
       : status === 'failed'
         ? 'warning'
         : 'neutral';
-  return <Badge variant={variant}>{status.replaceAll('_', ' ')}</Badge>;
+  return <Badge variant={variant}>{formatStatus(status)}</Badge>;
 }
 
 export function WorkflowBadge({ status }: { status: WorkflowLifecycle | undefined }) {
-  if (!status) return <Badge variant="neutral">Legacy run</Badge>;
+  if (!status) return <Badge variant="neutral">旧版运行记录</Badge>;
   return (
     <Badge
       variant={
         status === 'succeeded' ? 'ready' : status === 'partial_success' ? 'warning' : 'neutral'
       }
     >
-      {status.replaceAll('_', ' ')}
+      {formatStatus(status)}
     </Badge>
   );
 }
 
-export function LoadingPanel({ label = 'Loading Tail Radar data' }: { label?: string }) {
+export function LoadingPanel({ label = '正在加载尾盘雷达数据' }: { label?: string }) {
   return (
     <div
       className="grid min-h-72 place-items-center rounded-lg border border-[var(--border)] bg-[var(--surface)]"
@@ -75,7 +76,7 @@ export function ErrorPanel({ message }: { message: string }) {
     >
       <div className="max-w-md">
         <AlertTriangle className="mx-auto mb-3 size-6 text-rose-500" />
-        <h2 className="font-semibold">Tail Radar data could not be loaded</h2>
+        <h2 className="font-semibold">无法加载尾盘雷达数据</h2>
         <p className="mt-2 text-sm leading-6 text-[var(--text-muted)]">{message}</p>
       </div>
     </div>

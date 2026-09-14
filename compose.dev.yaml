@@ -3,9 +3,27 @@ services:
     build:
       target: development
     command:
-      - /bin/sh
-      - -c
-      - alembic upgrade head && exec uvicorn a_stock_lab.main:app --host 0.0.0.0 --port 8000 --reload
+      - uvicorn
+      - a_stock_lab.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --reload
+      - --no-access-log
+    volumes:
+      - ./backend/src:/app/src
+      - ./backend/alembic:/app/alembic
+      - ./backend/alembic.ini:/app/alembic.ini:ro
+      - ./runtime:/app/runtime
+
+  migrate:
+    volumes:
+      - ./backend/src:/app/src
+      - ./backend/alembic:/app/alembic
+      - ./backend/alembic.ini:/app/alembic.ini:ro
+
+  worker:
     volumes:
       - ./backend/src:/app/src
       - ./backend/alembic:/app/alembic
@@ -21,11 +39,11 @@ services:
     volumes:
       - ./frontend:/app
       - frontend-node-modules:/app/node_modules
+      - ./runtime/public/trend-radar:/app/public/data/trend-radar:ro
     ports: !override
-      - "5173:5173"
+      - "127.0.0.1:5173:5173"
     healthcheck:
       disable: true
 
 volumes:
   frontend-node-modules:
-

@@ -1,5 +1,5 @@
-"""Reserved delivery boundary for authenticated operational APIs.
+"""Delivery boundary for credential-gated operational APIs.
 
-Expensive jobs and provider calls must be added here only after authentication and
-authorization exist. They must not be exposed through the anonymous public API.
+The current write surface permits only explicitly confirmed, single-candidate BYOK research.
+Market scans and batch paid operations must never be exposed here anonymously.
 """

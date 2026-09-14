@@ -20,6 +20,5 @@ update an ADR when a durable decision changes.
 - Do not commit runtime financial data, generated datasets, credentials, `.env`, or secrets.
 - Run relevant format, lint, typecheck, and test commands after meaningful changes.
 
-The first-class feature boundaries are `tail_radar`, `intelligence`, `quant_lab`, and `assistant` in
+The first-class feature boundaries are `tail_radar`, `trend_radar`, `intelligence`, `quant_lab`, and `assistant` in
 both backend and frontend. Shared research output must use a versioned `ResearchArtifact` contract.
-

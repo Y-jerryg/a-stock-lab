@@ -8,7 +8,7 @@ from a_stock_lab.core.time import as_market_timezone
 from a_stock_lab.shared.execution.models import RunStatus
 
 TAIL_RADAR_WORKFLOW_JOB_TYPE = "tail_radar.application"
-TAIL_RADAR_WORKFLOW_VERSION = "tail-radar-workflow-v1"
+TAIL_RADAR_WORKFLOW_VERSION = "tail-radar-workflow-v2"
 
 
 class TailRadarWorkflowLifecycle(StrEnum):

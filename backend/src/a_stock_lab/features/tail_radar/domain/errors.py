@@ -34,6 +34,10 @@ class TailRadarWorkflowTimeError(TailRadarWorkflowError):
     """A workflow point-in-time boundary is invalid."""
 
 
+class TailRadarSchedulingError(TailRadarError):
+    """The official scheduled worker could not make a safe scheduling decision."""
+
+
 class TailRadarIntradayAnalysisError(TailRadarError):
     """The candidate intraday analysis could not be produced safely."""
 
@@ -54,6 +58,24 @@ class TailRadarResearchConfigurationError(TailRadarResearchError):
     """Backend-only research provider configuration is incomplete."""
 
 
+class TailRadarOnDemandResearchError(TailRadarResearchError):
+    """One credential-gated on-demand candidate research operation could not proceed."""
+
+    code = "tail_radar_on_demand_research_error"
+
+
+class TailRadarOnDemandResearchInProgressError(TailRadarOnDemandResearchError):
+    code = "tail_radar_research_in_progress"
+
+
+class TailRadarOnDemandResearchRetryRequiredError(TailRadarOnDemandResearchError):
+    code = "tail_radar_research_retry_confirmation_required"
+
+
+class TailRadarOnDemandResearchUnavailableError(TailRadarOnDemandResearchError):
+    code = "tail_radar_on_demand_research_unavailable"
+
+
 class ResearchProviderError(TailRadarResearchError):
     code = "research_provider_error"
 
@@ -72,6 +94,10 @@ class ResearchProviderUnavailableError(ResearchProviderError):
 
 class ResearchProviderAPIError(ResearchProviderError):
     code = "research_provider_api_error"
+
+
+class ResearchProviderAuthenticationError(ResearchProviderError):
+    code = "research_provider_authentication_error"
 
 
 class ResearchProviderInvalidResponseError(ResearchProviderError):

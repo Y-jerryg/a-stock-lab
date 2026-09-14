@@ -1,14 +1,20 @@
 from datetime import datetime, timedelta
+from threading import Barrier
 from types import SimpleNamespace
+from typing import cast
 from uuid import UUID
 
 import pytest
 
 from a_stock_lab.core.time import MARKET_TIME_ZONE
+from a_stock_lab.features.tail_radar.application.contracts import TailRadarDataRepository
 from a_stock_lab.features.tail_radar.application.models import (
     TailRadarCandidateData,
     TailRadarCandidatePage,
     TailRadarCandidatePayload,
+)
+from a_stock_lab.features.tail_radar.application.on_demand_research_service import (
+    TailRadarOnDemandResearchService,
 )
 from a_stock_lab.features.tail_radar.application.orchestration_models import (
     TAIL_RADAR_WORKFLOW_VERSION,
@@ -23,6 +29,10 @@ from a_stock_lab.features.tail_radar.application.orchestration_service import (
     TailRadarApplicationService,
 )
 from a_stock_lab.features.tail_radar.application.research_models import TailRadarResearchStatus
+from a_stock_lab.features.tail_radar.application.research_service import TailRadarResearchService
+from a_stock_lab.features.tail_radar.domain.errors import (
+    TailRadarOnDemandResearchRetryRequiredError,
+)
 from a_stock_lab.features.tail_radar.domain.screening import (
     TAIL_RADAR_SCREENING_RULE_VERSION,
     TailRadarDecisionOutcome,
@@ -219,11 +229,6 @@ class FakeWorkflowRepository:
         self._refresh_counts()
         partial = any(
             state.technical_status is not TailRadarCandidateStageStatus.SUCCEEDED
-            or state.research_status
-            not in {
-                TailRadarCandidateStageStatus.SUCCEEDED,
-                TailRadarCandidateStageStatus.NO_EVIDENCE,
-            }
             for state in self.states.values()
         )
         self.workflow = self.workflow.model_copy(
@@ -393,41 +398,14 @@ class FakeIntraday:
         return SimpleNamespace(analysis=SimpleNamespace(analysis_id=_derived_id(candidate_id, 1)))
 
 
-class FakeResearch:
-    def __init__(self) -> None:
-        self.failures: set[UUID] = set()
-        self.no_evidence: set[UUID] = set()
-        self.calls: list[tuple[UUID, bool]] = []
-
-    def execute(
-        self, *, candidate_id: UUID, analysis_as_of: datetime, force: bool
-    ) -> SimpleNamespace:
-        self.calls.append((candidate_id, force))
-        if candidate_id in self.failures:
-            raise RuntimeError("research unavailable")
-        status = (
-            TailRadarResearchStatus.NO_EVIDENCE
-            if candidate_id in self.no_evidence
-            else TailRadarResearchStatus.SUCCEEDED
-        )
-        return SimpleNamespace(
-            research=SimpleNamespace(
-                research_id=_derived_id(candidate_id, 2),
-                status=status,
-                error_code=None,
-            )
-        )
-
-
 def build_service(
-    *, snapshot_fail: bool = False
+    *, snapshot_fail: bool = False, intraday_workers: int = 1
 ) -> tuple[
     TailRadarApplicationService,
     FakeWorkflowRepository,
     FakeSnapshotExecution,
     FakeScreening,
     FakeIntraday,
-    FakeResearch,
 ]:
     candidates = (
         candidate(CANDIDATE_ONE, "600000"),
@@ -437,23 +415,20 @@ def build_service(
     snapshot = FakeSnapshotExecution(fail=snapshot_fail)
     screening = FakeScreening()
     intraday = FakeIntraday()
-    research = FakeResearch()
     service = TailRadarApplicationService(
         snapshot_execution=snapshot,  # type: ignore[arg-type]
         screening=screening,  # type: ignore[arg-type]
         intraday=intraday,  # type: ignore[arg-type]
-        research=research,  # type: ignore[arg-type]
         tail_radar_repository=FakeTailRadarRepository(candidates),  # type: ignore[arg-type]
         workflow_repository=workflow,  # type: ignore[arg-type]
+        intraday_workers=intraday_workers,
         clock=lambda: NOW,
     )
-    return service, workflow, snapshot, screening, intraday, research
+    return service, workflow, snapshot, screening, intraday
 
 
-def test_complete_workflow_is_idempotent_and_links_generated_artifacts() -> None:
-    service, repository, snapshot, screening, intraday, research = build_service()
-    research.no_evidence.add(CANDIDATE_TWO)
-
+def test_complete_workflow_is_idempotent_without_running_paid_research() -> None:
+    service, repository, snapshot, screening, intraday = build_service()
     result = service.execute(
         intended_snapshot_time=INTENDED,
         analysis_as_of=ANALYSIS_AS_OF,
@@ -465,21 +440,18 @@ def test_complete_workflow_is_idempotent_and_links_generated_artifacts() -> None
 
     assert result.workflow.lifecycle is TailRadarWorkflowLifecycle.SUCCEEDED
     assert result.workflow.technical_succeeded_count == 2
-    assert result.workflow.research_succeeded_count == 1
-    assert result.workflow.research_no_evidence_count == 1
+    assert result.workflow.research_pending_count == 2
     assert replay.disposition is TailRadarWorkflowDisposition.IDEMPOTENT_REPLAY
     assert snapshot.calls == 1
     assert screening.calls == 1
     assert intraday.calls == [CANDIDATE_ONE, CANDIDATE_TWO]
-    assert research.calls == [(CANDIDATE_ONE, False), (CANDIDATE_TWO, False)]
     assert all(state.intraday_analysis_id is not None for state in repository.states.values())
-    assert all(state.research_id is not None for state in repository.states.values())
+    assert all(state.research_id is None for state in repository.states.values())
 
 
-def test_partial_candidate_failures_are_isolated_and_resume_skips_paid_successes() -> None:
-    service, repository, _, _, intraday, research = build_service()
+def test_partial_technical_failures_are_isolated_and_resume_safe() -> None:
+    service, repository, _, _, intraday = build_service()
     intraday.failures.add(CANDIDATE_TWO)
-    research.failures.add(CANDIDATE_TWO)
 
     first = service.execute(
         intended_snapshot_time=INTENDED,
@@ -488,29 +460,18 @@ def test_partial_candidate_failures_are_isolated_and_resume_skips_paid_successes
     assert first.workflow.lifecycle is TailRadarWorkflowLifecycle.PARTIAL_SUCCESS
     assert first.workflow.technical_succeeded_count == 1
     assert first.workflow.technical_failed_count == 1
-    assert first.workflow.research_succeeded_count == 1
-    assert first.workflow.research_failed_count == 1
+    assert first.workflow.research_pending_count == 2
 
     intraday.failures.clear()
     second = service.resume(workflow_run_id=WORKFLOW_ID)
-    assert second.workflow.lifecycle is TailRadarWorkflowLifecycle.PARTIAL_SUCCESS
+    assert second.workflow.lifecycle is TailRadarWorkflowLifecycle.SUCCEEDED
     assert intraday.calls.count(CANDIDATE_ONE) == 1
     assert intraday.calls.count(CANDIDATE_TWO) == 2
-    assert research.calls.count((CANDIDATE_ONE, False)) == 1
-    assert research.calls.count((CANDIDATE_TWO, False)) == 1
-
-    research.failures.clear()
-    third = service.resume(
-        workflow_run_id=WORKFLOW_ID,
-        retry_failed_research=True,
-    )
-    assert third.workflow.lifecycle is TailRadarWorkflowLifecycle.SUCCEEDED
-    assert research.calls[-1] == (CANDIDATE_TWO, True)
-    assert repository.states[CANDIDATE_ONE].research_id is not None
+    assert repository.states[CANDIDATE_ONE].research_id is None
 
 
 def test_snapshot_provider_failure_is_fatal_without_starting_candidate_work() -> None:
-    service, repository, _, screening, intraday, research = build_service(snapshot_fail=True)
+    service, repository, _, screening, intraday = build_service(snapshot_fail=True)
 
     with pytest.raises(RuntimeError, match="snapshot unavailable"):
         service.execute(
@@ -523,8 +484,131 @@ def test_snapshot_provider_failure_is_fatal_without_starting_candidate_work() ->
     assert repository.workflow.error_stage == "snapshot"
     assert screening.calls == 0
     assert intraday.calls == []
+
+
+class FakeOnDemandRepository(FakeWorkflowRepository):
+    def __init__(self) -> None:
+        super().__init__()
+        self.candidate = candidate(CANDIDATE_ONE, "600000")
+        self.workflow = self._workflow(
+            lifecycle=TailRadarWorkflowLifecycle.SUCCEEDED,
+            execution_status=RunStatus.SUCCEEDED,
+            analysis_as_of=ANALYSIS_AS_OF,
+            snapshot_run_id=SNAPSHOT_RUN_ID,
+            snapshot_id=SNAPSHOT_ID,
+            screening_run_id=SCREENING_RUN_ID,
+            candidate_count=1,
+            technical_succeeded_count=1,
+            research_pending_count=1,
+            actual_started_at=INTENDED,
+            actual_finished_at=NOW,
+        )
+        self.states[CANDIDATE_ONE] = self._state(CANDIDATE_ONE).model_copy(
+            update={
+                "technical_status": TailRadarCandidateStageStatus.SUCCEEDED,
+                "intraday_analysis_id": _derived_id(CANDIDATE_ONE, 1),
+            }
+        )
+
+    def get_candidate(self, candidate_id: UUID) -> TailRadarCandidateData | None:
+        return self.candidate if candidate_id == CANDIDATE_ONE else None
+
+    def get_workflow_for_screening_run(
+        self, screening_run_id: UUID
+    ) -> TailRadarWorkflowData | None:
+        return self.workflow if screening_run_id == SCREENING_RUN_ID else None
+
+    def get_candidate_workflow_state(
+        self, candidate_id: UUID
+    ) -> TailRadarWorkflowCandidateState | None:
+        return self.states.get(candidate_id)
+
+    def get_latest_research(self, candidate_id: UUID) -> None:
+        del candidate_id
+        return None
+
+
+class FakePaidResearch:
+    def __init__(self) -> None:
+        self.calls: list[tuple[UUID, datetime, bool]] = []
+
+    def execute(
+        self, *, candidate_id: UUID, analysis_as_of: datetime, force: bool
+    ) -> SimpleNamespace:
+        self.calls.append((candidate_id, analysis_as_of, force))
+        return SimpleNamespace(
+            research=SimpleNamespace(
+                research_id=_derived_id(candidate_id, 2),
+                status=TailRadarResearchStatus.SUCCEEDED,
+                error_code=None,
+            )
+        )
+
+
+def test_on_demand_research_calls_exactly_one_selected_candidate() -> None:
+    repository = FakeOnDemandRepository()
+    research = FakePaidResearch()
+    service = TailRadarOnDemandResearchService(
+        research=cast(TailRadarResearchService, research),
+        repository=cast(TailRadarDataRepository, repository),
+    )
+
+    service.execute(candidate_id=CANDIDATE_ONE)
+
+    assert research.calls == [(CANDIDATE_ONE, ANALYSIS_AS_OF, False)]
+    assert (
+        repository.states[CANDIDATE_ONE].research_status is TailRadarCandidateStageStatus.SUCCEEDED
+    )
+    assert repository.states[CANDIDATE_ONE].research_id == _derived_id(CANDIDATE_ONE, 2)
+
+
+def test_failed_on_demand_research_requires_explicit_paid_retry() -> None:
+    repository = FakeOnDemandRepository()
+    repository.states[CANDIDATE_ONE] = repository.states[CANDIDATE_ONE].model_copy(
+        update={
+            "research_status": TailRadarCandidateStageStatus.FAILED,
+            "research_error_code": "fixture_failure",
+        }
+    )
+    research = FakePaidResearch()
+    service = TailRadarOnDemandResearchService(
+        research=cast(TailRadarResearchService, research),
+        repository=cast(TailRadarDataRepository, repository),
+    )
+
+    with pytest.raises(TailRadarOnDemandResearchRetryRequiredError):
+        service.execute(candidate_id=CANDIDATE_ONE)
+
     assert research.calls == []
+    service.execute(candidate_id=CANDIDATE_ONE, retry_failed=True)
+    assert research.calls == [(CANDIDATE_ONE, ANALYSIS_AS_OF, True)]
 
 
 def _derived_id(source: UUID, suffix: int) -> UUID:
     return UUID(int=(source.int + suffix) % (1 << 128))
+
+
+def test_parallel_intraday_preserves_cutoff_isolates_failure_and_resumes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, repository, snapshot, screening, intraday = build_service(intraday_workers=2)
+    barrier = Barrier(2, timeout=3)
+    execute = intraday.execute
+
+    def concurrent(*, candidate_id: UUID, analysis_as_of: datetime) -> SimpleNamespace:
+        assert analysis_as_of == ANALYSIS_AS_OF
+        barrier.wait()  # Cannot complete if candidate requests are accidentally serialized.
+        return execute(candidate_id=candidate_id, analysis_as_of=analysis_as_of)
+
+    intraday.failures.add(CANDIDATE_TWO)
+    monkeypatch.setattr(intraday, "execute", concurrent)
+    result = service.execute(intended_snapshot_time=INTENDED, analysis_as_of=ANALYSIS_AS_OF)
+    assert result.workflow.technical_succeeded_count == 1
+    assert result.workflow.technical_failed_count == 1
+    assert set(intraday.calls) == {CANDIDATE_ONE, CANDIDATE_TWO}
+    assert all(state.research_id is None for state in repository.states.values())
+    monkeypatch.setattr(intraday, "execute", execute)
+    intraday.failures.clear()
+    assert service.resume(workflow_run_id=WORKFLOW_ID).workflow.technical_succeeded_count == 2
+    assert intraday.calls.count(CANDIDATE_ONE) == 1
+    assert snapshot.calls == screening.calls == 1
