@@ -32,7 +32,7 @@ def bars_for(prices: list[float], *, baseline: int = 20, volume: float = 50) -> 
         ([100, 99, 98, 97, 96, 95, 94, 93, 92], 9, 0),
         ([100, 98, 99, 97, 96, 95, 94, 93, 92], 9, 1),
         ([100, 98.5, 97.3, 98, 96.8, 95.7, 96.4, 94.8, 93.5], 9, 2),
-        ([100, 98, 99, 97, 98, 96, 97, 95, 94], 9, 3),
+        ([100, 98, 99, 97, 98, 96, 97, 95, 94], 7, 2),
         ([90, 100, 99, 98, 97, 96, 95, 94, 93], 8, 0),
         ([90, 92, 100, 99, 98, 97, 96, 95, 94], 7, 0),
     ],
@@ -49,25 +49,27 @@ def test_longest_valid_window(prices: list[float], expected: int, pullbacks: int
         [100, 101, 102, 103, 104, 105, 106, 107, 108],
         [100] * 9,
         [100, 99, 98, 97, 96, 95, 94, 98, 97],
+        # Final close falls from yesterday, but is above an earlier close.
+        [100, 99, 98, 97, 96, 95, 94, 95, 94.5],
+        # Matching an earlier low is not a new closing low.
+        [100, 99, 98, 97, 96, 95, 94, 95, 94],
+        # Flat closes do not count as declining days or rising rebounds.
+        [100, 99, 98, 97, 97, 96, 95, 94, 93],
     ],
 )
 def test_no_valid_latest_window(prices: list[float]) -> None:
     assert detect_trend(bars_for(prices, baseline=0), TrendSettings(_env_file=None)) is None
 
 
-def test_four_pullbacks_fail_nine_day_window() -> None:
+def test_three_pullbacks_fail_nine_day_window() -> None:
     config = TrendSettings(_env_file=None, trend_min_days=9)
-    assert (
-        detect_trend(bars_for([100, 100.1, 98, 98.1, 96, 96.1, 94, 94.1, 92], baseline=0), config)
-        is None
-    )
+    assert detect_trend(bars_for([100, 98, 99, 97, 98, 96, 97, 95, 94], baseline=0), config) is None
 
 
 def test_negative_slope_and_final_decline_independent_requirements() -> None:
     config = TrendSettings(
         _env_file=None,
         trend_min_days=9,
-        trend_max_pullback_days=8,
         trend_max_single_pullback_pct=100,
     )
     # Last < first, but most observations form an upward path.
@@ -77,7 +79,7 @@ def test_negative_slope_and_final_decline_independent_requirements() -> None:
 
 
 def test_threshold_and_noise() -> None:
-    bars = bars_for([100, 98, 99.47, 97, 97 + 1e-10, 96, 95, 94, 93], baseline=0)
+    bars = bars_for([100, 98, 99.47, 97, 96.5, 96, 95, 94, 93], baseline=0)
     result = detect_trend(bars, TrendSettings(_env_file=None))
     assert result and result.trend_days == 9 and result.pullback_days == 1
     assert (
@@ -86,6 +88,29 @@ def test_threshold_and_noise() -> None:
         )
         is None
     )
+
+
+def test_two_rebounds_can_exceed_old_amplitude_cap() -> None:
+    bars = bars_for([100, 98, 96, 98, 97, 98, 96, 95, 94], baseline=0)
+    result = detect_trend(bars, TrendSettings(_env_file=None))
+    assert result and result.trend_days == 9 and result.pullback_days == 2
+    assert result.max_pullback_pct > 1.5
+    assert (
+        detect_trend(
+            bars, TrendSettings(_env_file=None, trend_min_days=9, trend_max_single_pullback_pct=1.5)
+        )
+        is None
+    )
+
+
+def test_latest_bar_must_be_the_unique_low_not_an_older_matching_window() -> None:
+    bars = bars_for([100, 99, 98, 97, 96, 95, 94, 93, 92, 93], baseline=0)
+    assert detect_trend(bars, TrendSettings(_env_file=None)) is None
+
+
+def test_compose_null_cap_is_parsed_as_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TREND_MAX_SINGLE_PULLBACK_PCT", "null")
+    assert TrendSettings(_env_file=None).trend_max_single_pullback_pct is None
 
 
 @pytest.mark.parametrize("days", [7, 8, 9])
@@ -130,6 +155,7 @@ def test_suspension_and_duplicate_dates() -> None:
         {"trend_top_n": 0},
         {"trend_min_days": 9, "trend_max_days": 7},
         {"trend_max_single_pullback_pct": -1},
+        {"trend_max_pullback_days": 3},
         {"trend_strong_volume_ratio": 0},
         {"trend_schedule_poll_seconds": 0},
         {"trend_timezone": "Asia/Tokyo"},

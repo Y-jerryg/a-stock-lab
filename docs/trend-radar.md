@@ -13,7 +13,8 @@
    Alembic 迁移，然后启动本地 API 和网站。保留原有数据库卷，不创建 Supabase 账户。
    为采用手动抓取默认方式，此操作会停止旧的 trend-worker 定时容器。
 4. 点击 **开始抓取**。程序抓取行情、筛选并存储数据，完成后自动导出本机网页所需结果。
-   默认扫描热度前 300，耗时取决于行情接口，运行日志在窗口和 `runtime/operator/` 中。
+   扫描沪深北全部 A 股，关注度前 300 仅用于优先展示和高亮；没有关注度的股票也会扫描。
+   全市场耗时比原先 300 只更长，窗口显示实际总数与进度，日志在 `runtime/operator/` 中。
 5. 点击 **查看结果**，或打开 `http://localhost:8080/#/trend-radar`。
    网站每 5 秒读取一次结果索引，支持历史记录、7/8/9 日筛选、强缩量筛选及计算详情。
 6. 点击候选股票名称或 **查看 K 线与数据**，查看前复权日 K 线、MA5/10/20、成交量、
@@ -29,7 +30,8 @@
 没有已完成扫描时页面显示暂无数据。成功处理数包含不符合筛选条件的股票，不等于候选数。
 “重新导出结果”仅从数据库修复网页文件，不重新访问行情源。
 日志中的 `scan_busy` 表示另一抓取正在执行，等待其结束即可。
-首次准备环境不自动抓取、不自动发布公网，也不会启用 Tail Radar 的定时抓取服务。
+准备环境不自动抓取趋势或发布公网；它会启动 Tail Radar 的定时服务，便于两个板块共用
+电脑控制入口。日常启动可点“启动本机服务”，不必重复构建镜像。
 
 无需配置任何 Supabase URL、Key 或管理员 UUID。已有 `.env` 中其他模块的配置请保留；旧的
 Supabase 变量不再被本模块读取，可以移除。系统仍然需要本地 PostgreSQL，由 Docker 管理。
@@ -123,22 +125,35 @@ docker compose --profile trend stop trend-worker
 
 ## 默认筛选配置
 
-`.env.example` 列出了完整配置。默认热度前 300、最近 9→8→7 日、最多 3 次小幅反弹、
-单次不超过 1.5%、基准 20 日、成交量比例不超过 55%。本次改动保留原有算法。
+`.env.example` 列出了完整配置。扫描全部 A 股，关注度前 300 优先高亮；截至数据日期检查
+最近 9→8→7 个交易日，最多允许 2 天反弹，其余每天收盘严格下降，最后收盘必须低于区间
+内所有此前收盘价，不接受平盘或并列最低。默认不限制反弹幅度。基准 20 日、成交量比例
+不超过 55% 仅用于“强缩量”标记。决定见 [ADR 0021](adr/0021-all-a-share-closing-low-trends.md)。
+
+`TREND_TOP_N=300` 是高亮阈值，不再限制扫描股票数；`TREND_MAX_PULLBACK_DAYS=2`；
+`TREND_MAX_SINGLE_PULLBACK_PCT=null` 表示不限制反弹幅度。旧 `.env` 若显式配置了 3 或 1.5，
+请同步修改。更新后先准备本地环境，再重新抓取；仅重新导出旧数据不会改变昨天的筛选结果。
+网站按每次扫描保存的规则展示说明，旧记录仍保留其原先的条件。
+发布新规则结果前，先把本次代码同步到 GitHub 并部署更新前端；旧前端不支持关闭反弹幅度
+限制时的 null 参数。然后再通过电脑窗口“发布网站”更新结果数据。
 
 ## Screening semantics
 
-1. Fetch the complete available Eastmoney attention dataset through AKShare `stock_comment_em`.
+1. Fetch the independent Shanghai/Shenzhen/Beijing A-share list via `stock_info_a_code_name`.
+   Scan every listed stock, including those without attention observations. Fetch the complete
+   available Eastmoney attention dataset through AKShare `stock_comment_em`.
    Validate A-share symbols, unique records, finite scores and dates. Rank `关注指数` descending, with
-   symbol ascending for ties; select exactly `TREND_TOP_N` (300). Never fall back to a Top-100 feed.
+   symbol ascending for ties; `TREND_TOP_N` (300) controls priority/highlights, not inclusion.
    Securities whose attention score is null/NaN have no available observation and are excluded
-   before ranking; their count is logged. Other malformed scores fail validation.
+   before ranking, but still participate in price screening via the independent list. Their count
+   is logged; unavailable attention displays no rank. Other malformed scores fail validation.
 2. Resolve the latest completed exchange session using the real trading calendar, not weekdays.
    Before 15:15 Shanghai, use the previous session. Require heat dates to match that session;
    delayed provider publication fails safely and can be retried manually later.
-3. Test the latest 9, then 8, then 7 closing observations. Require final close < first close and
-   ordinary least-squares slope < 0. At most three positive returns are allowed; each is <= 1.5%.
-   Changes <= `1e-8` percentage points do not count as positive pullbacks. N observations produce
+3. Test the latest 9, then 8, then 7 closing observations. Require final close strictly below all
+   previous window closes and ordinary least-squares slope < 0. At most two positive returns are
+   allowed, without a default amplitude cap; every other daily return must be negative. Changes
+   within `1e-8` percentage points of zero are flat and invalidate a window. N observations produce
    N-1 internal returns, matching the nine-price example in the product specification.
 4. Keep the longest valid window. Compare its mean volume with the mean of the immediately previous
    20 sessions. `volume_ratio <= 0.55` produces `strong`; otherwise `normal`. Compute amount means

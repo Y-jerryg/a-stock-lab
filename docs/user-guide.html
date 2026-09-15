@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A股实验室 · 两个雷达完整操作指南</title>
+<style>
+:root{color-scheme:light}*{box-sizing:border-box}body{margin:0;background:#f4f6f8;color:#202d3d;font:16px/1.85 system-ui,"Microsoft YaHei",sans-serif}main{max-width:1040px;margin:auto;padding:36px 24px 80px}header{background:#173444;color:white;padding:34px;border-radius:18px}h1{font-size:30px;line-height:1.4;margin:8px 0}h2{font-size:23px;margin:0 0 18px;color:#173444}h3{font-size:18px;margin:24px 0 10px}section,nav{background:white;border:1px solid #dce3e8;border-radius:14px;padding:28px;margin-top:22px;scroll-margin-top:20px}nav ol{columns:2}p,li{max-width:88ch}li{margin:7px 0}a{color:#006f87;text-decoration-thickness:1px;text-underline-offset:3px}header a{color:#b5f2ff}code{font-family:Consolas,monospace;background:#eef3f6;padding:2px 5px;border-radius:4px;overflow-wrap:anywhere}pre{background:#152c39;color:#e3f5fa;padding:18px;border-radius:10px;overflow:auto;font-size:14px;line-height:1.65}pre code{background:none;padding:0;color:inherit}table{width:100%;border-collapse:collapse;margin:16px 0;font-size:15px}th,td{padding:12px;text-align:left;border-bottom:1px solid #dce3e8;vertical-align:top}th{background:#edf4f6}.note{border-left:4px solid #bd8b19;background:#fff8e4;padding:14px 18px}.good{border-left:4px solid #178568;background:#ecf8f3;padding:14px 18px}.small{font-size:14px;color:#586877}.steps{font-size:18px;font-weight:650;color:#12596a}summary{cursor:pointer;font-weight:650}details{border-top:1px solid #dce3e8;padding:16px 0}footer{text-align:center;margin-top:30px;color:#637384}@media(max-width:640px){main{padding:14px}section,nav,header{padding:20px}nav ol{columns:1}h1{font-size:25px}table{font-size:13px}th,td{padding:7px}}@media print{body{background:white}main{max-width:none;padding:0}section,nav{break-inside:avoid;border:0}header{background:white;color:black}a{color:inherit}}
+</style>
+</head>
+<body><main>
+<header><div>本机操作 · 每日更新 · 网站分享 · 故障处理</div><h1>A股实验室<br>尾盘雷达与趋势雷达完整操作指南</h1><p>适用于项目 <code>D:\Dev\a-stock-lab</code>。本指南可离线阅读，不需要 Docker 或网站启动。最后修订：2026 年 9 月 15 日。</p></header>
+<nav aria-label="目录"><h2>从这里开始</h2><ol>
+<li><a href="#quick">你每天实际要做什么</a></li><li><a href="#roles">两个板块有什么区别</a></li><li><a href="#buttons">电脑控制窗口每个按钮的用途</a></li><li><a href="#tail">板块 1：尾盘雷达</a></li><li><a href="#ai">访客如何使用自己的 Key 做 AI 分析</a></li><li><a href="#trend">板块 2：趋势雷达</a></li><li><a href="#public">让其他人通过网站访问</a></li><li><a href="#statuses">如何判断完成、失败和发布状态</a></li><li><a href="#recovery">常见故障怎么处理</a></li><li><a href="#commands">必要时使用的命令</a></li><li><a href="#care">关机、备份与长期运行</a></li></ol></nav>
+<section id="quick"><h2>1. 你每天实际要做什么</h2>
+<p class="steps">打开 Docker → 打开控制窗口 → 启动本机服务 → 查看或更新需要的板块</p>
+<ol><li>打开 <strong>Docker Desktop</strong>，等待引擎启动完成。仅打开 Docker 的窗口，不一定代表所有项目服务都已运行。</li>
+<li>进入 <code>D:\Dev\a-stock-lab</code>，双击 <strong>Start-TrendRadar.cmd</strong>。它现在是两个雷达共用的电脑控制入口。</li>
+<li>点击 <strong>启动本机服务</strong>，等待完成。它启动数据库、本机网站、后端和尾盘定时服务；不触发全市场趋势扫描，也不调用付费 AI。</li>
+<li>需要看已有数据：点击 <strong>打开尾盘雷达</strong>或<strong>查看结果</strong>。不必为打开网页重新抓取。</li>
+<li>需要当天尾盘数据：交易日<strong>北京时间 14:30 前</strong>保持电脑、Docker、网络运行，并让电脑不休眠。尾盘定时任务会自动执行。</li>
+<li>需要更新趋势数据：建议交易日<strong>北京时间 15:45 后</strong>点击<strong>开始抓取</strong>。完成后先查看本机结果；要更新公网，再点击<strong>发布网站</strong>。</li>
+<li>需要朋友访问尾盘和 AI：点击<strong>启动公网网站</strong>，等待连接成功和 GitHub Actions 部署完成，再分享原来的 Pages 地址。</li></ol>
+<p class="note">所有市场时间均为北京时间（Asia/Shanghai）。如果电脑显示日本时间：14:30 北京时间是 15:30 日本时间，15:45 北京时间是 16:45 日本时间。网页里的“数据日期”是行情所属交易日，不一定是你操作电脑的日期。</p>
+<p>只有首次安装、更新程序代码、或明确提示镜像/依赖缺失时，才需要点击<strong>准备本地环境</strong>重新构建。日常开机通常点<strong>启动本机服务</strong>即可。</p></section>
+<section id="roles"><h2>2. 两个板块有什么区别</h2>
+<table><thead><tr><th>项目</th><th>尾盘雷达</th><th>趋势雷达</th></tr></thead><tbody>
+<tr><td>主要用途</td><td>查看交易日 14:30 左右的市场快照、候选股、分时技术指标及按需 AI 研究。</td><td>寻找截至最近已收盘交易日、最近 7～9 个交易日处于下降趋势的股票。</td></tr>
+<tr><td>更新方式</td><td>当前已启用交易日 14:30 定时服务。</td><td>当前以电脑窗口手动抓取为准；并非只要 Docker 开着就每天自动更新。</td></tr>
+<tr><td>公网如何取数据</td><td>经 HTTPS 公网连接，读取你电脑上的后端和数据库。</td><td>读取已上传到 GitHub Pages 的静态结果。</td></tr>
+<tr><td>抓取后要发布吗</td><td>公网连接正常时，刷新网页即可看到数据库新结果，不需要上传尾盘 JSON。</td><td>需要点“发布网站”并等待 Actions 成功，公网才会更新。</td></tr>
+<tr><td>电脑关机后</td><td>公网尾盘数据及 AI 暂时不可用。</td><td>别人仍能查看上次成功发布的结果和 K 线，但不会自动新增数据。</td></tr>
+</tbody></table>
+<p>本机地址：<a href="http://localhost:8080/#/tail-radar">尾盘雷达</a> · <a href="http://localhost:8080/#/trend-radar">趋势雷达</a>。<code>localhost</code> 指的是当前访问者自己的电脑，不能把这个地址发给朋友使用。</p></section>
+<section id="buttons"><h2>3. 电脑控制窗口每个按钮的用途</h2><table><thead><tr><th>按钮</th><th>什么时候点击</th><th>会做什么</th></tr></thead><tbody>
+<tr><td>启动本机服务</td><td>日常开机、Docker 重启后。</td><td>启动数据库、后端、网页、尾盘定时服务。保留已有数据。</td></tr>
+<tr><td>准备本地环境</td><td>首次使用或更新代码后。</td><td>重新构建镜像、执行数据库迁移、启动本机服务；沿用手动趋势抓取默认方式，停止旧趋势定时容器。</td></tr>
+<tr><td>开始抓取</td><td>要生成一份新的趋势扫描结果时。</td><td>扫描全部 A 股，保存结果并导出本机网页数据；不会自动发布到公网。</td></tr>
+<tr><td>查看结果</td><td>想打开本机趋势雷达时。</td><td>只打开网页，不重新扫描。</td></tr>
+<tr><td>重新导出结果</td><td>数据库已有结果，但本机静态文件缺失或需要修复时。</td><td>从数据库重建网页结果及 K 线文件；不重新请求全市场行情。</td></tr>
+<tr><td>发布网站</td><td>本机已有希望分享的趋势结果时。</td><td>打包公开结果、上传 GitHub Release、触发 Pages 部署，并提前检查网页代码兼容性。</td></tr>
+<tr><td>打开尾盘雷达</td><td>查看快照、分时指标或进行 AI 分析时。</td><td>打开本机尾盘页面。</td></tr>
+<tr><td>检查运行状态</td><td>页面打不开、怀疑服务没启动、或想确认数据日期时。</td><td>只读检查容器、最新数据日期和候选数。不会发起扫描。</td></tr>
+<tr><td>启动公网网站</td><td>需要别人访问尾盘和 AI，或电脑/隧道重启后。</td><td>建立 HTTPS 连接，检查跨域，更新网站后端地址并触发 Pages 部署。</td></tr>
+<tr><td>停止公网网站</td><td>想关闭外部访问时。</td><td>停止公网连接和网关，保留本机服务及数据库。</td></tr>
+<tr><td>详细操作指南</td><td>需要帮助时。</td><td>打开这份离线指南。也可在根目录双击 Start-Guide.cmd。</td></tr>
+</tbody></table></section>
+<section id="tail"><h2>4. 板块 1：尾盘雷达</h2><h3>如何看结果</h3><ol>
+<li>点击“打开尾盘雷达”，先看<strong>数据日期、快照时间和候选数量</strong>。上次数据不会因为过了一天就自动变成今天的数据。</li>
+<li>当前筛选规则是快照时涨幅 2%～3% 等页面所示条件；它与趋势雷达的连续下降规则完全不同。</li>
+<li>可按股票名称/代码搜索，按板块、技术分析状态或 AI 研究状态筛选。</li>
+<li>点击股票进入详情，查看快照价格、分时图、量价指标和技术分析。指标以保存的分析时点为准，不是实时交易终端。</li>
+<li>“技术分析成功”表示相应分时指标已经算好；“AI 待研究”通常表示还没有人确认并发起付费 AI，属于正常状态。</li></ol>
+<h3>每天如何更新</h3><p>交易日 14:30 由 <code>worker</code> 定时服务执行。电脑最好提前几分钟开机，确保服务已启动。采集和分析需要时间，14:30 刚到时尚未看到新记录不一定是故障。等完成后刷新，查看数据日期是否变为当天。</p>
+<p class="note">如果错过 14:30 的正式窗口，不能在晚上或周末重新“制造”当天 14:30 的全市场快照。保留旧数据并等待下一次正式采集。已有快照中的失败技术分析可以尝试恢复，恢复也必须沿用原分析时点。</p>
+<p>部分股票分时接口失败时，其余股票仍然可看。不要把“部分成功”理解为快照和全部候选都失效。恢复失败项的命令见后面的故障处理。</p></section>
+<section id="ai"><h2>5. 访客如何使用自己的 Key 做 AI 分析</h2><ol>
+<li>打开尾盘候选股详情。公网访问需要你的电脑、Docker 和公网连接持续运行。</li>
+<li>在 AI 研究区域填写访客自己的 <strong>OpenAI API Key</strong>。本机也使用同样操作，不需要网站运营者把自己的 Key 分给别人。</li>
+<li>确认页面展示的研究对象和费用提示，勾选确认，再点击分析。只读股票页面和日常抓取不会自动调用付费 AI。</li>
+<li>等待返回。运行中不要连续点击或反复重试；已有成功研究可能直接读取缓存。</li>
+<li>如提示 Key 无效、权限或额度问题，检查该 Key 所属项目是否可以调用后端配置的模型。如提示网络/限流，稍后再试。失败记录需按页面按钮明确确认重试。</li></ol>
+<p>Key 经 HTTPS 发送到你电脑上的后端，由后端调用 OpenAI；不会写入网页发布包、应用数据库或浏览器持久存储。访客应信任网站运营者。不要把 Key 放进网址、聊天记录、代码或 GitHub 变量。</p>
+<p>页面能打开不等于每一把 Key 都可调用模型。完整 AI 成功还取决于访客 Key 的权限、可用额度、模型服务和网络。分析输出会按现有研究记录机制保存；不要输入私人敏感信息。</p></section>
+<section id="trend"><h2>6. 板块 2：趋势雷达</h2><h3>当前筛选逻辑</h3><ul>
+<li>扫描沪、深、北全部 A 股。关注度前 300 名只影响优先展示及金色标签，不限制入选范围；没有关注度排名的股票也会参与。</li>
+<li>截至最近已完成的交易日，按 9、8、7 个交易日依次检查，优先保留最长符合条件的区间。</li>
+<li>最多允许 2 天向上反弹，不限制单日反弹幅度；其余相邻收盘价必须下降，不接受平盘。</li>
+<li>最后收盘必须严格低于这段区间内此前所有收盘价，同时整体斜率向下。</li>
+<li>天数按区间内收盘价数量计算，7 天对应 6 次相邻比较。数据使用前复权日线。</li>
+<li>成交量低于此前基准期的设定比例时标为“强缩量”。这是独立标记，普通成交量的股票也可以入选。</li></ul>
+<h3>一次完整更新怎么操作</h3><ol>
+<li>建议在交易日北京时间 15:45 之后点击“开始抓取”。15:15 之前程序使用上一已完成交易日；周末和节假日使用最近的实际交易日。</li>
+<li>观察窗口进度，例如“正在处理 1234 / 5562”。全市场比原先 300 只耗时长；2026-09-14 这次实际约 4 小时 55 分钟，今后耗时随行情源、缓存和网络变化，不能保证固定时长。</li>
+<li>运行中保持电脑唤醒、网络和 Docker 正常。个别股票失败会记录后继续；连续或大面积行情失败仍会触发整体停止。</li>
+<li>看到“扫描完成：共……成功处理……失败……候选……”后，点击“查看结果”。成功处理包括未达到筛选条件的股票，所以候选数通常少于成功处理数。</li>
+<li>网页每页显示 30 只，搜索名称或代码可跨全部结果查找。切换历史记录可查看原来的扫描；新规则不会悄悄重算旧记录。</li>
+<li>点击股票名称或“查看 K 线与数据”，查看保存的日 K 线、MA5/10/20、成交量和每日行情表。图表阴影是入选区间，可以缩放查看。</li>
+<li>确认结果后点击“发布网站”，等待 GitHub Actions 成功，再刷新公网网页。</li></ol>
+<p class="good">昨晚的全市场扫描已经完成：请求 5,562 只，成功处理 5,549 只，13 只未成功处理，保存 1,270 个候选。这个状态是 <code>completed_with_warnings</code>，不是整次失败。发布或网页出错时应先修复发布，不要因此再花数小时重新抓取。</p></section>
+<section id="public"><h2>7. 让其他人通过网站访问</h2><p>现有网站：<a href="https://y-jerryg.github.io/a-stock-lab/#/tail-radar">公网尾盘雷达</a> · <a href="https://y-jerryg.github.io/a-stock-lab/#/trend-radar">公网趋势雷达</a>。给朋友分享这两个地址。</p>
+<h3>尾盘和 AI</h3><ol><li>本机两个板块先能打开。</li><li>点击控制窗口“启动公网网站”，或双击根目录 <code>Start-PublicWebsite.cmd</code>。</li><li>程序检查连接、更新后端地址并触发部署。打开它打印的 <a href="https://github.com/Y-jerryg/a-stock-lab/actions/workflows/pages.yml">GitHub Actions 页面</a>，等待最新相关工作流成功。</li><li>刷新 Pages 网站。电脑和 Docker 持续运行时，访客才能读取尾盘和提交 AI 请求。启动脚本完成后可以关闭其命令窗口，连接由容器维持。</li></ol>
+<p>这是临时 HTTPS 隧道，不要求购买云服务器。电脑重启、Docker 重启或隧道重连后，后端地址可能变化，需要重新运行启动入口并等待网站部署。朋友使用的 Pages 地址不变。当前方案不保证长久在线；固定域名隧道可以作为后续升级。</p>
+<h3>趋势结果</h3><p>“发布网站”上传的是公开结果和候选股保存的 K 线，随后触发网页部署。部署完成后即使电脑关机，已发布趋势结果仍可查看。没有点击发布，本机新结果不会自动出现在 Pages。</p>
+<h3>代码更新和数据发布是两件事</h3><p>修改了筛选参数结构或网页后，要先把代码同步到 GitHub 并部署，再发布新格式结果。本次入口增加了版本检查；提示“GitHub 网页版本落后”时，不要重抓股票，应先更新代码。日常只更新行情且代码没变，直接“抓取 → 发布网站”即可。</p>
+<p>本机已安装 GitHub CLI 时，通常无需每天登录。若提示授权失效，在终端执行 <code>gh auth login</code>。仓库的 <strong>Settings → Pages → Source</strong> 应保持 <strong>GitHub Actions</strong>。</p></section>
+<section id="statuses"><h2>8. 如何判断完成、失败和发布状态</h2><table><thead><tr><th>看到的状态</th><th>真实含义</th><th>下一步</th></tr></thead><tbody>
+<tr><td>扫描中 / running</td><td>还在处理股票。</td><td>看进度是否前进，保持电脑运行。</td></tr>
+<tr><td>扫描成功 / success</td><td>任务完整处理并保存。</td><td>查看结果，需要公网更新就发布。</td></tr>
+<tr><td>扫描完成（部分失败） / completed_with_warnings</td><td>少量股票失败，成功数据及候选已保存。</td><td>可以正常使用和发布。展开失败名单看具体股票。</td></tr>
+<tr><td>failed</td><td>本次任务遇到全局错误或超过失败阈值。</td><td>查看原因；网页保留最近完成的结果，不能把旧结果当本次成功。</td></tr>
+<tr><td>数据已上传 / 已提交网站部署</td><td>已经触发 Actions，但还不能据此判定网站更新完成。</td><td>等待对应工作流绿色成功，再刷新网页。</td></tr>
+<tr><td>发布失败</td><td>GitHub、网络、版本或构建问题；不等于抓取失败。</td><td>修复发布问题后重发，不必重新扫描。</td></tr>
+<tr><td>AI 待研究</td><td>尚未发起付费分析。</td><td>需要时在详情页自行输入 Key 并确认。</td></tr>
+</tbody></table><p><code>runtime/operator/*-error.log</code> 是进程的标准错误输出文件，里面也包含正常的 INFO 日志和 Docker 提示；文件存在或里面出现“某只股票失败”，并不代表整次任务失败。新版窗口使用独立 <code>*-result.json</code> 报告显示最终结果。</p></section>
+<section id="recovery"><h2>9. 常见故障怎么处理</h2>
+<details open><summary>本机两个网页都打不开</summary><ol><li>确认 Docker 引擎启动完成。</li><li>打开控制窗口，点“启动本机服务”，再点“检查运行状态”。</li><li>应看到 postgres、backend、frontend 运行，尾盘定时还需要 worker。</li><li>用本机网址重新打开，必要时按 Ctrl+F5 强制刷新。</li><li>若服务镜像缺失或代码刚更新，再点“准备本地环境”。</li></ol></details>
+<details open><summary>本机正常，但公网尾盘打不开或不能 AI 分析</summary><p>先点“启动公网网站”，等待连接检查和 Actions 成功。检查电脑是否休眠、断网，或 public-tunnel 是否停止。旧的临时隧道地址可能已失效，仅刷新浏览器不能修复失效的后端地址。</p></details>
+<details open><summary>公网趋势没有数据，但我明明已经抓完了</summary><p>先看本机趋势的数据日期和数量。本机有数据就不要重抓：点击“发布网站”，等待工作流成功。如果网页代码版本落后，先同步新代码；如果浏览器保留旧页面，强制刷新。确认打开的是正确的 Pages 地址，而不是旧收藏夹中的其他站点。</p></details>
+<details open><summary>抓取有 13 只失败，是否需要重新跑全部股票</summary><p>若最终是 completed_with_warnings，成功结果可以正常使用。<code>missing_latest_session</code> 表示该股票缺少目标日行情，可能是停牌或源未更新；<code>provider_error</code> 是行情源请求问题。不要强行拿更早的一根日线当作当天数据。</p></details>
+<details><summary>日志显示 stale_heat_data、scan_busy 或 market_data_failure_threshold</summary><p><code>stale_heat_data</code>：关注度数据还未更新到选定交易日，稍后重试。<code>scan_busy</code>：另一任务持有扫描锁，等待它完成，不要并发打开多个扫描。<code>market_data_failure_threshold</code>：失败过多或连续失败，检查行情源和网络后重试；已保存证据不会被删除。</p></details>
+<details><summary>尾盘快照有数据，但部分股票没有分时指标</summary><p>通常是该股票的分时接口未成功，其他股票仍可看。已有快照可以恢复失败的技术分析，且不会重新执行成功项或调用 AI。需要沿用已有 workflow 的标识和原分析时点，见下面命令。历史行情源若已不提供对应数据，不能保证补齐。</p></details>
+<details><summary>网站已开，但某个 API Key 分析失败</summary><p>先看具体错误：Key/权限/额度问题由 Key 持有人处理；超时、429 或服务不可用可稍后重试。不要连续触发付费请求。网站运营者不需要收集访客的 Key 来排查日志。</p></details>
+<details><summary>什么时候需要重新导出，而不是重新抓取</summary><p>数据库已有完成结果，但本机网页文件丢失、导出失败、或需要补齐已保存的候选 K 线详情时，点“重新导出结果”。它不会更新行情日期，也不会把旧结果改按新规则重算。</p></details>
+</section>
+<section id="commands"><h2>10. 必要时使用的命令</h2><p>平时优先使用按钮。以下命令在 PowerShell 中执行，先进入项目目录：</p><pre><code>cd D:\Dev\a-stock-lab
+# 查看所有容器状态
+docker compose ps -a
+# 启动本机服务（等价于按钮）
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/trend-radar-action.ps1 -Action Start
+# 查看尾盘定时服务心跳
+docker compose exec -T worker tail-radar worker-health --max-age-seconds 60
+# 修复趋势输出，不重新抓行情
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/trend-radar-action.ps1 -Action Export
+# 启动或停止公网
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/public-website.ps1 -Action Start
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/public-website.ps1 -Action Stop</code></pre>
+<h3>尾盘失败技术项恢复</h3><p>先取得已有快照对应的工作流标识，不要随意创建新的历史快照。下面从本机最新记录读取标识再恢复；它可能仍返回部分成功。</p><pre><code>$run = Invoke-RestMethod http://localhost:8080/api/v1/tail-radar/runs/latest
+$summary = Invoke-RestMethod "http://localhost:8080/api/v1/tail-radar/runs/$($run.run_id)/summary"
+docker compose exec -T backend tail-radar resume --workflow-run-id $summary.workflow.workflow_run_id</code></pre>
+<h3>可选：趋势每天自动抓取</h3><p>目前默认手动。如果你以后确实要改为每个交易日 15:45 自动抓取，可执行以下命令。它仍<strong>不会自动发布到公网</strong>；“准备本地环境”会停止旧趋势定时容器，之后需要重新启用。</p><pre><code>docker compose --profile trend up -d --build trend-worker
+# 取消定时趋势抓取
+docker compose --profile trend stop trend-worker</code></pre>
+<p>趋势定时每天最多尝试一次，失败后需手动重试。电脑错过当天运行时间，恢复后只按现有调度规则处理，不伪造过去的热度。</p></section>
+<section id="care"><h2>11. 关机、备份与长期运行</h2><ul><li>想自动抓尾盘或让访客使用 AI，电脑必须开机、不休眠，Docker 与网络正常。显示器可以关闭。</li><li>扫描过程中不要关闭 Docker、关机或重启正在运行任务的容器。关闭控制窗口会受到运行状态保护，但不能抵御系统关机。</li><li>关闭公网用“停止公网网站”。停止不会删除数据库，公网趋势已发布数据仍保留。</li><li>不要为了“重置程序”删除 Docker 的 postgres-data 卷，或执行 <code>docker compose down -v</code>，那会删除数据库数据。</li><li>重要数据应备份 PostgreSQL 数据库和 runtime；仅复制项目代码或 GitHub 仓库不等于备份本机数据库。不要把数据库备份、runtime 或 .env 强行提交到 Git。</li><li>临时隧道适合试用和小范围分享。需要长期稳定地址时，可以保留自己的电脑作为后端，再配置固定域名隧道；仍需维持电脑在线。</li></ul><p class="steps">只看已有结果：启动服务 → 查看。<br>更新趋势并分享：开始抓取 → 查看结果 → 发布网站 → 等 Actions 成功。<br>分享尾盘和 AI：启动本机服务 → 启动公网网站 → 等 Actions 成功。</p></section>
+<footer>本指南随项目保存，可用浏览器打印为 PDF。遇到故障先检查数据日期、任务最终状态和服务状态，避免无意义的重复扫描。</footer>
+</main></body></html>

@@ -14,11 +14,13 @@ from a_stock_lab.features.trend_radar.domain.models import (
 
 
 class PublicParameters(Model):
+    rule_version: Literal[1, 2] = 1
+    universe_scope: Literal["top_heat", "all_a"] = "top_heat"
     top_n: int
     min_days: int
     max_days: int
     max_pullback_days: int
-    max_single_pullback_pct: float
+    max_single_pullback_pct: float | None
     baseline_volume_days: int
     strong_volume_ratio: float
 

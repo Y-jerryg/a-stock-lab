@@ -5,7 +5,11 @@ from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from a_stock_lab.features.trend_radar.application.contracts import LocalRepository
-from a_stock_lab.features.trend_radar.domain.models import COMPLETED_STATUSES, TrendError
+from a_stock_lab.features.trend_radar.domain.models import (
+    COMPLETED_STATUSES,
+    TrendError,
+    candidate_order,
+)
 from a_stock_lab.features.trend_radar.domain.publication import (
     PublicIndex,
     PublicResults,
@@ -52,10 +56,8 @@ class StaticResultPublisher:
                 ):
                     raise TrendError("publication_result_mismatch")
                 results.sort(
-                    key=lambda item: (
-                        not item.is_strong_volume_contraction,
-                        item.volume_ratio,
-                        item.heat_rank,
+                    key=lambda item: candidate_order(
+                        item, int(str(run.configuration_snapshot["top_n"]))
                     )
                 )
                 inputs = self.source.candidate_inputs(run.id)

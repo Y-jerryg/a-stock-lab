@@ -27,6 +27,7 @@ def create_service() -> TrendRadarScanService:
     repository = create_repository()
     return TrendRadarScanService(
         config=config,
+        universe=provider,
         heat=provider,
         market=provider,
         calendar=provider,

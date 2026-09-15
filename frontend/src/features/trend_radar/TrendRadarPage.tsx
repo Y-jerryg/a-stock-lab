@@ -8,10 +8,11 @@ import './trend.css';
 
 const t = text.trend;
 
-function StockCard({ stock, runId }: { stock: Result; runId: string }) {
+function StockCard({ stock, runId, topN }: { stock: Result; runId: string; topN: number }) {
+  const popular = stock.heat_rank > 0 && stock.heat_rank <= topN;
   const detailPath = `/trend-radar/runs/${runId}/stocks/${stock.symbol}`;
   const metrics = [
-    [t.rank, `#${String(stock.heat_rank)}`],
+    [t.rank, stock.heat_rank > 0 ? `#${String(stock.heat_rank)}` : '暂无关注度排名'],
     [t.days, t.trendLabel(stock.trend_days)],
     [t.decline, percent(stock.trend_return_pct)],
     [t.pullbacks, stock.pullback_days],
@@ -20,7 +21,9 @@ function StockCard({ stock, runId }: { stock: Result; runId: string }) {
     [t.amount, percent(stock.amount_ratio, true)],
   ];
   return (
-    <article className={`trend-stock ${stock.is_strong_volume_contraction ? 'trend-strong' : ''}`}>
+    <article
+      className={`trend-stock ${stock.is_strong_volume_contraction ? 'trend-strong' : ''} ${popular ? 'trend-popular' : ''}`}
+    >
       <header>
         <div>
           <h2>
@@ -30,7 +33,10 @@ function StockCard({ stock, runId }: { stock: Result; runId: string }) {
           </h2>
           <span>{stock.symbol}</span>
         </div>
-        <b className="trend-badge">{t.status[stock.highlight_level]}</b>
+        <div className="trend-badges">
+          {popular && <b className="trend-attention-badge">关注度前 {topN}</b>}
+          <b className="trend-badge">{t.status[stock.highlight_level]}</b>
+        </div>
       </header>
       <dl>
         {metrics.map(([label, value]) => (
@@ -74,6 +80,10 @@ export function TrendRadarPage() {
   };
   const [strong, setStrong] = useState(false);
   const [days, setDays] = useState(0);
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageContext, setPageContext] = useState('');
+  const pageSize = 30;
   const dashboard = useQuery({
     queryKey: ['trend-dashboard'],
     queryFn: readDashboard,
@@ -92,8 +102,19 @@ export function TrendRadarPage() {
   });
   const filtered =
     results.data?.filter(
-      (row) => (!strong || row.is_strong_volume_contraction) && (!days || row.trend_days === days),
+      (row) =>
+        (!strong || row.is_strong_volume_contraction) &&
+        (!days || row.trend_days === days) &&
+        `${row.symbol} ${row.name}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()),
     ) ?? [];
+  const context = `${run?.id ?? ''}|${String(strong)}|${String(days)}|${search}`;
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const currentPage = context === pageContext ? Math.min(page, pageCount) : 1;
+  const visible = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const selectPage = (next: number) => {
+    setPageContext(context);
+    setPage(next);
+  };
   const config = run?.payload.configuration_snapshot;
   return (
     <section className="trend-page">
@@ -141,7 +162,10 @@ export function TrendRadarPage() {
           <div className="trend-summary">
             {[
               [t.dataDate, run?.trade_date ?? t.missing],
-              [t.heatCount, run?.payload.heat_universe_count ?? '—'],
+              [
+                t.heatCount,
+                run?.payload.requested_count ?? run?.payload.heat_universe_count ?? '—',
+              ],
               [t.candidates, run?.payload.candidate_count ?? '—'],
               [t.strongCount, run?.payload.strong_contraction_count ?? '—'],
             ].map(([label, value]) => (
@@ -170,6 +194,16 @@ export function TrendRadarPage() {
               </p>
             )}
           <div className="trend-filters">
+            <label>
+              搜索股票
+              <input
+                value={search}
+                onChange={(event) => {
+                  setSearch(event.target.value);
+                }}
+                placeholder="股票代码或名称"
+              />
+            </label>
             <label>
               {t.history}
               <select
@@ -230,9 +264,37 @@ export function TrendRadarPage() {
                   <p>{t.noStrong}</p>
                 )}
               {!filtered.length && <p>{t.noCandidates}</p>}
+              <div className="trend-pagination">
+                <span role="status">
+                  共 {filtered.length} 只 · 第 {currentPage} / {pageCount} 页 · 每页 {pageSize} 只
+                </span>
+                <button
+                  type="button"
+                  disabled={currentPage <= 1}
+                  onClick={() => {
+                    selectPage(currentPage - 1);
+                  }}
+                >
+                  上一页
+                </button>
+                <button
+                  type="button"
+                  disabled={currentPage >= pageCount}
+                  onClick={() => {
+                    selectPage(currentPage + 1);
+                  }}
+                >
+                  下一页
+                </button>
+              </div>
               <div className="trend-grid">
-                {filtered.map((stock) => (
-                  <StockCard key={stock.symbol} stock={stock} runId={run.id} />
+                {visible.map((stock) => (
+                  <StockCard
+                    key={stock.symbol}
+                    stock={stock}
+                    runId={run.id}
+                    topN={config?.top_n ?? 300}
+                  />
                 ))}
               </div>
             </>
@@ -249,6 +311,8 @@ export function TrendRadarPage() {
                   config.max_single_pullback_pct,
                   config.baseline_volume_days,
                   config.strong_volume_ratio,
+                  config.rule_version ?? 1,
+                  config.universe_scope ?? 'top_heat',
                 )}
               </p>
               <p>

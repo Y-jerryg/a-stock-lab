@@ -7,14 +7,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class TrendSettings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=(".env", "../.env"), extra="ignore", allow_inf_nan=False
+        env_file=(".env", "../.env"), extra="ignore", allow_inf_nan=False, env_parse_none_str="null"
     )
 
     trend_top_n: int = Field(default=300, gt=0, le=10000)
     trend_min_days: int = Field(default=7, ge=7, le=9)
     trend_max_days: int = Field(default=9, ge=7, le=9)
-    trend_max_pullback_days: int = Field(default=3, ge=0, le=8)
-    trend_max_single_pullback_pct: float = Field(default=1.5, ge=0)
+    trend_max_pullback_days: int = Field(default=2, ge=0, le=2)
+    trend_max_single_pullback_pct: float | None = Field(default=None, ge=0)
     trend_baseline_volume_days: int = Field(default=20, gt=0, le=120)
     trend_strong_volume_ratio: float = Field(default=0.55, gt=0)
     trend_schedule_time: time = time(15, 45)
@@ -37,7 +37,11 @@ class TrendSettings(BaseSettings):
 
     def snapshot(self) -> dict[str, object]:
         return {
-            key.removeprefix("trend_"): value
-            for key, value in self.model_dump(mode="json").items()
-            if key.startswith("trend_")
+            "rule_version": 2,
+            "universe_scope": "all_a",
+            **{
+                key.removeprefix("trend_"): value
+                for key, value in self.model_dump(mode="json").items()
+                if key.startswith("trend_")
+            },
         }

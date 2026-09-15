@@ -13,6 +13,8 @@ def fetch_frame(action: str, args: list[str]):  # type: ignore[no-untyped-def]
 
     if action == "heat":
         return ak.stock_comment_em()
+    if action == "universe":
+        return ak.stock_info_a_code_name()
     if action == "calendar":
         return ak.tool_trade_date_hist_sina()
     if action == "bars":

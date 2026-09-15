@@ -24,7 +24,8 @@ from a_stock_lab.features.trend_radar.factory import (
 def main() -> None:
     parser = argparse.ArgumentParser(prog="trend-radar")
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("scan", help="Start a scan locally and export public results")
+    scan = commands.add_parser("scan", help="Start a scan locally and export public results")
+    scan.add_argument("--summary", action="store_true", help="Print a compact desktop result")
     commands.add_parser("worker", help="Run the optional local daily scheduler")
     commands.add_parser("worker-once", help="Perform one scheduler iteration")
     inspect = commands.add_parser("inspect", help="Inspect a local scan attempt")
@@ -73,7 +74,25 @@ def main() -> None:
             sys.stdout.write(json.dumps({"output": str(output)}) + "\n")
         elif args.command == "scan":
             run = create_service().scan("cli")
-            sys.stdout.write(run.model_dump_json() + "\n" if run else '{"status":"busy"}\n')
+            if run and args.summary:
+                sys.stdout.write(
+                    run.model_dump_json(
+                        include={
+                            "id",
+                            "status",
+                            "trade_date",
+                            "requested_count",
+                            "successful_count",
+                            "failed_count",
+                            "candidate_count",
+                            "strong_contraction_count",
+                            "error_message",
+                        }
+                    )
+                    + "\n"
+                )
+            else:
+                sys.stdout.write(run.model_dump_json() + "\n" if run else '{"status":"busy"}\n')
             if run is None or run.status not in COMPLETED_STATUSES:
                 raise SystemExit(1)
         else:

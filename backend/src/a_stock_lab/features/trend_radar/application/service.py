@@ -10,6 +10,7 @@ from a_stock_lab.features.trend_radar.application.contracts import (
     MarketDataProvider,
     ResultPublisher,
     TradingCalendarProvider,
+    UniverseProvider,
 )
 from a_stock_lab.features.trend_radar.application.diagnostics import scanning_stock
 from a_stock_lab.features.trend_radar.config import TrendSettings
@@ -21,6 +22,7 @@ from a_stock_lab.features.trend_radar.domain.models import (
     ScanRun,
     StockFailure,
     TrendError,
+    candidate_order,
 )
 
 logger = logging.getLogger(__name__)
@@ -34,12 +36,14 @@ def utc_now() -> datetime:
 def rank_heat(rows: list[Heat], count: int) -> list[Heat]:
     if len({row.symbol for row in rows}) != len(rows):
         raise TrendError("duplicate_heat_symbols")
-    if len(rows) < count:
+    if len(rows) < count or not rows:
         raise TrendError("insufficient_heat_universe")
+    if any(row.heat_score is None for row in rows):
+        raise TrendError("invalid_heat_score")
     return [
         row.model_copy(update={"heat_rank": index + 1})
         for index, row in enumerate(
-            sorted(rows, key=lambda row: (-row.heat_score, row.symbol))[:count]
+            sorted(rows, key=lambda row: (-(row.heat_score or 0), row.symbol))[:count]
         )
     ]
 
@@ -49,6 +53,7 @@ class TrendRadarScanService:
         self,
         *,
         config: TrendSettings,
+        universe: UniverseProvider,
         heat: HeatProvider,
         market: MarketDataProvider,
         calendar: TradingCalendarProvider,
@@ -57,6 +62,7 @@ class TrendRadarScanService:
         clock: Callable[[], datetime] = utc_now,
     ) -> None:
         self.config, self.heat, self.market = config, heat, market
+        self.universe = universe
         self.calendar, self.local, self.publisher, self.clock = calendar, local, publisher, clock
 
     def scan(self, trigger: Literal["scheduled", "cli"]) -> ScanRun | None:
@@ -67,7 +73,7 @@ class TrendRadarScanService:
                 started_at=started,
                 trade_date=started.astimezone(SHANGHAI).date(),
                 configuration_snapshot=self.config.snapshot(),
-                schema_version=2,
+                schema_version=3,
             )
             if not self.local.begin(run):
                 self.publisher.publish()
@@ -153,15 +159,27 @@ class TrendRadarScanService:
             },
         )
         with scanning_stock(run_id=str(run.id)):
-            heat = rank_heat(self.heat.fetch_heat(), self.config.trend_top_n)
+            listed = self.universe.fetch_universe()
+            if not listed or len({row.symbol for row in listed}) != len(listed):
+                raise TrendError("invalid_a_share_universe")
+            raw_heat = self.heat.fetch_heat()
+            listed_symbols = {row.symbol for row in listed}
+            available_heat = [row for row in raw_heat if row.symbol in listed_symbols]
+            heat = rank_heat(available_heat, len(available_heat))
         if any(row.data_date != trade_date for row in heat):
             raise TrendError("stale_heat_data")
+        ranked = {row.symbol: row for row in heat}
+        stocks = [
+            ranked.get(row.symbol) or Heat(**row.model_dump(), heat_source="unavailable")
+            for row in listed
+        ]
+        stocks.sort(key=lambda row: (row.heat_rank or 100000, row.symbol))
         run = run.model_copy(
             update={
                 "trade_date": trade_date,
                 "data_as_of": self.clock(),
                 "heat_universe_count": len(heat),
-                "requested_count": len(heat),
+                "requested_count": len(stocks),
             }
         )
         self.local.save_run(run)
@@ -173,11 +191,11 @@ class TrendRadarScanService:
         failures: list[StockFailure] = []
         sources: set[str] = set()
         successful = consecutive_failures = 0
-        for index, stock in enumerate(heat, start=1):
+        for index, stock in enumerate(stocks, start=1):
             context = {
                 "run_id": str(run.id),
                 "stock_number": index,
-                "total": len(heat),
+                "total": len(stocks),
                 "symbol": stock.symbol,
                 "stock_name": stock.name,
             }
@@ -273,13 +291,11 @@ class TrendRadarScanService:
                 },
             )
             if failures and (
-                len(failures) / len(heat) >= self.config.trend_max_failure_ratio
+                len(failures) / len(stocks) >= self.config.trend_max_failure_ratio
                 or consecutive_failures >= self.config.trend_max_consecutive_failures
             ):
                 raise TrendError("market_data_failure_threshold")
-        results.sort(
-            key=lambda row: (not row.is_strong_volume_contraction, row.volume_ratio, row.heat_rank)
-        )
+        results.sort(key=lambda row: candidate_order(row, self.config.trend_top_n))
         return (
             run.model_copy(
                 update={
@@ -301,7 +317,7 @@ class TrendRadarScanService:
             return None, "nonconsecutive_sessions"
         trend = detect_trend(bars, self.config)
         if trend is None:
-            return None, None
+            return None, "no_matching_downtrend"
         try:
             volume = analyze_volume(bars, trend, self.config)
         except TrendError as exc:

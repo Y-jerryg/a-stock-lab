@@ -9,7 +9,7 @@ EPSILON_PCT = 1e-8
 
 
 def detect_trend(bars: Sequence[Bar], config: TrendSettings) -> Trend | None:
-    """N closing observations imply N-1 within-window returns; longest window wins."""
+    """Latest N closes must end at a unique low, with declines except bounded rebounds."""
     dates = [bar.trade_date for bar in bars]
     if dates != sorted(set(dates)) or len({bar.symbol for bar in bars}) > 1:
         raise TrendError("invalid_bar_sequence")
@@ -28,10 +28,14 @@ def detect_trend(bars: Sequence[Bar], config: TrendSettings) -> Trend | None:
             (i - mean_x) ** 2 for i in range(days)
         )
         if (
-            closes[-1] >= closes[0]
+            closes[-1] >= min(closes[:-1])
             or slope >= 0
+            or any(abs(value) <= EPSILON_PCT for value in returns)
             or len(pullbacks) > config.trend_max_pullback_days
-            or max(pullbacks, default=0) > config.trend_max_single_pullback_pct + EPSILON_PCT
+            or (
+                config.trend_max_single_pullback_pct is not None
+                and max(pullbacks, default=0) > config.trend_max_single_pullback_pct + EPSILON_PCT
+            )
         ):
             continue
         return Trend(

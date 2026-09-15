@@ -108,9 +108,13 @@ export function TrendStockDetailPage() {
             {stock.name} <span className="trend-symbol">{symbol}</span>
           </h1>
           <p>
-            热度排名 #{stock.heat_rank} · {stock.trend_days} 日下降趋势 ·{' '}
+            {stock.heat_rank > 0 ? `关注度排名 #${String(stock.heat_rank)}` : '暂无关注度排名'} ·{' '}
+            {stock.trend_days} 日下降趋势 ·{' '}
             {stock.is_strong_volume_contraction ? '强缩量' : '普通成交量'}
           </p>
+          {stock.heat_rank > 0 && stock.heat_rank <= config.top_n && (
+            <b className="trend-attention-badge">关注度前 {config.top_n}</b>
+          )}
         </div>
         {latest && (
           <div className={`trend-quote ${changeClass}`}>
@@ -189,12 +193,12 @@ export function TrendStockDetailPage() {
               ],
               ['趋势终点收盘', latest?.close.toFixed(2) ?? '—'],
               [
-                '期间回调次数',
+                '期间反弹天数',
                 `${String(stock.pullback_days)} / 最多 ${String(config.max_pullback_days)} 次`,
               ],
               [
-                '最大单次回调',
-                `${percent(stock.max_pullback_pct)} / 上限 ${percent(config.max_single_pullback_pct)}`,
+                '最大单日反弹',
+                `${percent(stock.max_pullback_pct)} / ${config.max_single_pullback_pct === null ? '不限制幅度' : `上限 ${percent(config.max_single_pullback_pct)}`}`,
               ],
               ['价格趋势斜率', stock.trend_slope.toFixed(4)],
               ['关注指数排名', `#${String(stock.heat_rank)}`],

@@ -1,15 +1,18 @@
 # A-Stock Lab
 
-Trend Radar is available as an independent daily Top-300 attention / 9–8–7-session decline /
-volume-contraction feature. It uses local PostgreSQL, a Windows operator window for scans, and
+Trend Radar scans all listed A-shares for latest 9–8–7-session declines ending at a new closing low,
+with at most two rebound days. Attention Top-300 candidates are highlighted alongside independent
+volume-contraction labels. It uses local PostgreSQL, a Windows operator window for scans, and
 a Chinese read-only website backed by exported static results. No Supabase account is required.
 See [Trend Radar setup and operations](docs/trend-radar.md) and
 [ADR 0016](docs/adr/0016-trend-radar-local-control-static-publication.md).
 The [verification record](docs/trend-radar-verification.md) lists checks actually run and deployment
 steps that still require configured infrastructure.
 
-中文入口：[本机使用与网站分享](docs/usage-and-sharing.md)。最新修复和真实全量扫描结果见
+日常使用请双击根目录 `Start-Guide.cmd` 打开[两个雷达完整离线指南](docs/user-guide.html)。
+中文说明：[本机使用与网站分享](docs/usage-and-sharing.md)。之前的扫描修复见
 [趋势雷达修复验证](docs/trend-radar-repair-2026-09-13.md)。
+全市场范围与最新下降趋势规则见 [2026-09-15 验证记录](docs/trend-radar-rule-verification-2026-09-15.md)。
 
 A-Stock Lab is a production-oriented personal A-share market research platform. Phase 0 established
 the modular monolith, database contracts, runtime, observability, frontend shell, and delivery

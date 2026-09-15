@@ -40,6 +40,9 @@ def test_publication_is_read_only_allowlisted_and_keeps_previous_success(tmp_pat
     index = json.loads((tmp_path / "public/index.json").read_text())
     assert index["latest"]["id"] == str(first.id)
     assert index["attempts"][0]["status"] == "failed"
+    assert index["latest"]["payload"]["configuration_snapshot"]["rule_version"] == 2
+    assert index["latest"]["payload"]["configuration_snapshot"]["universe_scope"] == "all_a"
+    assert index["latest"]["payload"]["configuration_snapshot"]["max_single_pullback_pct"] is None
     assert "never-publish" not in json.dumps(index)
     assert "exclusions" not in json.dumps(index)
     assert "provider_timeout_seconds" not in json.dumps(index)
@@ -57,6 +60,43 @@ def test_publication_is_read_only_allowlisted_and_keeps_previous_success(tmp_pat
         assert "never-publish" not in json.dumps(details) and "exclusions" not in json.dumps(
             details
         )
+
+
+def test_historical_rules_remain_legacy_when_exported(tmp_path: Path) -> None:
+    memory = Memory()
+    run = service(memory).scan("cli")
+    assert run
+    legacy = dict(run.configuration_snapshot)
+    legacy.pop("rule_version")
+    legacy.pop("universe_scope")
+    legacy.update(max_pullback_days=3, max_single_pullback_pct=1.5)
+    memory.save_run(run.model_copy(update={"configuration_snapshot": legacy}))
+    StaticResultPublisher(memory, tmp_path).publish()
+    config = json.loads((tmp_path / "index.json").read_text())["latest"]["payload"][
+        "configuration_snapshot"
+    ]
+    assert config["rule_version"] == 1 and config["universe_scope"] == "top_heat"
+    assert config["max_pullback_days"] == 3 and config["max_single_pullback_pct"] == 1.5
+
+
+def test_publication_prioritizes_attention_before_volume(tmp_path: Path) -> None:
+    memory = Batch(set())
+    memory.heat = memory.heat[:2]
+    run = service(memory).scan("cli")  # attention threshold = 1
+    assert run
+    hot, cold = memory.results[run.id]
+    hot = hot.model_copy(
+        update={
+            "is_strong_volume_contraction": False,
+            "highlight_level": "normal",
+            "volume_ratio": 1.0,
+        }
+    )
+    memory.results[run.id] = [cold, hot]
+    memory.save_run(run.model_copy(update={"strong_contraction_count": 1}))
+    StaticResultPublisher(memory, tmp_path).publish()
+    rows = json.loads((tmp_path / "runs" / f"{run.id}.json").read_text())["results"]
+    assert [row["heat_rank"] for row in rows] == [1, 2]
 
 
 def test_failed_export_does_not_destroy_success_and_can_retry_without_market_calls(

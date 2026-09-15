@@ -63,6 +63,27 @@ def test_missing_attention_is_not_assigned_an_invented_rank(
     assert AkShareTrendProvider(TrendSettings(_env_file=None)).fetch_heat() == []
 
 
+def test_full_exchange_universe_is_independent_of_attention(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Keep identifiers six digits while covering each exchange.
+    rows = [{"code": str(600000 + i), "name": "Example"} for i in range(4000)]
+    rows.extend([{"code": "000001", "name": "Shenzhen"}, {"code": "920001", "name": "Beijing"}])
+    provider = AkShareTrendProvider(TrendSettings(_env_file=None))
+    fetch = Mock(return_value=rows)
+    monkeypatch.setattr(provider, "_fetch", fetch)
+    result = provider.fetch_universe()
+    assert len(result) == 4002
+    assert result[0].symbol == "000001" and result[-1].symbol == "920001"
+    fetch.assert_called_once_with("universe")
+    fetch.return_value = rows[:300]
+    with pytest.raises(TrendError, match="incomplete_a_share_universe"):
+        provider.fetch_universe()
+    fetch.return_value = rows[:-1]
+    with pytest.raises(TrendError, match="incomplete_a_share_universe"):
+        provider.fetch_universe()
+
+
 def test_daily_fallback_preserves_bounds_and_source_and_logs_child_traceback(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,

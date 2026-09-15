@@ -18,11 +18,13 @@ export interface Run {
     failed_count?: number;
     failed_symbols?: { symbol: string; name: string; error_code: string }[];
     configuration_snapshot: {
+      rule_version?: 1 | 2;
+      universe_scope?: 'top_heat' | 'all_a';
       top_n: number;
       min_days: number;
       max_days: number;
       max_pullback_days: number;
-      max_single_pullback_pct: number;
+      max_single_pullback_pct: number | null;
       baseline_volume_days: number;
       strong_volume_ratio: number;
     };
@@ -113,10 +115,14 @@ function validRun(value: unknown): value is Run {
       'min_days',
       'max_days',
       'max_pullback_days',
-      'max_single_pullback_pct',
       'baseline_volume_days',
       'strong_volume_ratio',
-    ].every((key) => finite(config[key]))
+    ].every((key) => finite(config[key])) &&
+    (config.rule_version === undefined || config.rule_version === 1 || config.rule_version === 2) &&
+    (config.universe_scope === undefined ||
+      config.universe_scope === 'top_heat' ||
+      config.universe_scope === 'all_a') &&
+    (config.max_single_pullback_pct === null || finite(config.max_single_pullback_pct))
   );
 }
 function validResult(value: unknown): value is Result {
@@ -192,12 +198,8 @@ export async function readResults(runId: string): Promise<Result[]> {
   ) {
     throw new Error('invalid_results');
   }
-  return value.results.sort(
-    (a, b) =>
-      Number(b.is_strong_volume_contraction) - Number(a.is_strong_volume_contraction) ||
-      a.volume_ratio - b.volume_ratio ||
-      a.heat_rank - b.heat_rank,
-  );
+  // Publication has already applied the run's attention threshold and volume ordering.
+  return value.results;
 }
 
 function validBars(value: unknown, symbol: string, run: Run): value is DailyBar[] {

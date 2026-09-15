@@ -8,7 +8,14 @@ import pytest
 from a_stock_lab.features.trend_radar.application.service import TrendRadarScanService, rank_heat
 from a_stock_lab.features.trend_radar.application.worker import TrendWorker
 from a_stock_lab.features.trend_radar.config import TrendSettings
-from a_stock_lab.features.trend_radar.domain.models import Bar, Candidate, Heat, ScanRun, TrendError
+from a_stock_lab.features.trend_radar.domain.models import (
+    Bar,
+    Candidate,
+    Heat,
+    ListedStock,
+    ScanRun,
+    TrendError,
+)
 from test_trend_radar_domain import bars_for
 
 NOW = datetime(2026, 1, 29, 8, 0, tzinfo=UTC)
@@ -101,6 +108,9 @@ class Memory:
     def fetch_heat(self) -> list[Heat]:
         return self.heat
 
+    def fetch_universe(self) -> list[ListedStock]:
+        return [ListedStock(symbol=row.symbol, name=row.name, fetched_at=NOW) for row in self.heat]
+
     def fetch_bars(self, symbol: str, start: date, end: date) -> list[Bar]:
         if self.failure:
             raise TrendError("provider_error")
@@ -114,6 +124,7 @@ class Memory:
 def service(memory: Memory, now: datetime = NOW) -> TrendRadarScanService:
     return TrendRadarScanService(
         config=TrendSettings(_env_file=None, trend_top_n=1),
+        universe=memory,
         heat=memory,
         market=memory,
         calendar=memory,
@@ -130,6 +141,35 @@ def test_shared_pipeline(trigger: str) -> None:
     assert run and run.status == "success" and run.candidate_count == 1
     assert memory.published[0].trend_days == 9
     assert "top_n" in run.configuration_snapshot
+
+
+def test_all_a_stocks_are_scanned_including_outside_top_n_and_without_attention(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memory = Batch(set())
+    listed = memory.fetch_universe()
+    memory.heat = memory.heat[:2]  # 298 listed stocks have no attention observation.
+    monkeypatch.setattr(memory, "fetch_universe", lambda: listed)
+    scanner = service(memory)  # top_n = 1 is a display threshold, not a scan limit.
+    run = scanner.scan("cli")
+    assert run and run.status == "success"
+    assert run.requested_count == run.successful_count == run.candidate_count == 300
+    assert run.heat_universe_count == 2
+    assert len(memory.called) == 300
+    assert memory.published[0].heat_rank == 1
+    assert any(row.heat_rank == 2 for row in memory.published)
+    missing = next(row for row in memory.published if row.symbol == "600002")
+    assert missing.heat_rank == 0 and missing.heat_score is None and missing.data_date is None
+    assert run.configuration_snapshot["universe_scope"] == "all_a"
+    assert run.configuration_snapshot["rule_version"] == 2
+
+
+def test_new_rule_records_price_exclusions(monkeypatch: pytest.MonkeyPatch) -> None:
+    memory = Memory()
+    memory.bars[-1] = memory.bars[-2].model_copy(update={"trade_date": NOW.date()})
+    run = service(memory).scan("cli")
+    assert run and run.status == "success" and run.candidate_count == 0
+    assert run.exclusions == {"600000": "no_matching_downtrend"}
 
 
 @pytest.mark.parametrize("problem", ["stale", "missing", "duplicate", "provider", "heat_date"])

@@ -106,7 +106,7 @@ def test_local_migration_lock_and_idempotent_writes(database: Engine, tmp_path: 
             connection.scalar(
                 text(
                     "select count(*) from research_artifacts "
-                    "where module='trend_radar' and schema_version=2"
+                    "where module='trend_radar' and schema_version=3"
                 )
             )
             == 6

@@ -160,6 +160,7 @@ https://你的GitHub用户名.github.io/a-stock-lab/#/trend-radar
 | Actions 的 Configure GitHub Pages 失败 | 检查本仓库 Settings → Pages 的 Source 已选 GitHub Actions |
 | 数据上传成功但部署失败 | 打开最新 Actions 的红色步骤查看具体错误；修复后重新点发布网站 |
 | 网站没有候选或没有 K 线 | 确认发布的是本机新结果，并等待最新 Actions 成功后刷新 |
+| 首次发布停在 `release not found` | 旧脚本在 Windows PowerShell 5.1 下会提前退出；更新 `scripts/trend-radar-action.ps1` 后重新点击发布，无需重新抓取或准备镜像 |
 
 板块 2 通过静态文件运行；板块 1 和 AI 分析需要额外部署后端，参见
 [两个板块的使用和分享](usage-and-sharing.md)。

@@ -3,7 +3,17 @@ from datetime import date, datetime
 from typing import Protocol
 from uuid import UUID
 
-from a_stock_lab.features.trend_radar.domain.models import Bar, Candidate, Heat, ScanRun
+from a_stock_lab.features.trend_radar.domain.models import (
+    Bar,
+    Candidate,
+    Heat,
+    ListedStock,
+    ScanRun,
+)
+
+
+class UniverseProvider(Protocol):
+    def fetch_universe(self) -> list[ListedStock]: ...
 
 
 class HeatProvider(Protocol):

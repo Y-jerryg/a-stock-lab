@@ -81,6 +81,55 @@ beforeEach(() => {
   mocks.results.mockResolvedValue([stock]);
 });
 describe('Trend Radar', () => {
+  it('paginates a full-market result and searches across all pages', async () => {
+    mocks.results.mockResolvedValue(
+      Array.from({ length: 65 }, (_, i) => ({
+        ...stock,
+        symbol: String(600000 + i),
+        name: `候选${String(i)}`,
+      })),
+    );
+    mount(<TrendRadarPage />);
+    expect(await screen.findByText('候选0')).toBeInTheDocument();
+    expect(screen.getAllByRole('article')).toHaveLength(30);
+    expect(screen.queryByText('候选60')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '下一页' }));
+    expect(screen.getByText('候选30')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('搜索股票'), { target: { value: '600060' } });
+    expect(screen.getByText('候选60')).toBeInTheDocument();
+    expect(screen.getAllByRole('article')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: '上一页' })).toBeDisabled();
+  });
+  it('shows all-market candidates and highlights only the top attention group', async () => {
+    const current: Run = {
+      ...run,
+      payload: {
+        ...run.payload,
+        requested_count: 5000,
+        configuration_snapshot: {
+          ...run.payload.configuration_snapshot,
+          rule_version: 2,
+          universe_scope: 'all_a',
+          max_pullback_days: 2,
+          max_single_pullback_pct: null,
+        },
+      },
+    };
+    mocks.dashboard.mockResolvedValue({ latest: current, attempts: [current] });
+    mocks.results.mockResolvedValue([
+      stock,
+      { ...stock, symbol: '600001', name: '非热门候选', heat_rank: 301 },
+      { ...stock, symbol: '600002', name: '无关注度候选', heat_rank: 0 },
+    ]);
+    mount(<TrendRadarPage />);
+    expect(await screen.findByText('非热门候选')).toBeInTheDocument();
+    expect(screen.getByText('无关注度候选')).toBeInTheDocument();
+    expect(screen.getAllByText('关注度前 300')).toHaveLength(1);
+    expect(screen.getByText('暂无关注度排名')).toBeInTheDocument();
+    expect(screen.queryByText('#0')).not.toBeInTheDocument();
+    expect(screen.getByText(/扫描沪深北全部A股/)).toHaveTextContent('不限制单日反弹幅度');
+    expect(screen.getByText(/扫描沪深北全部A股/)).toHaveTextContent('严格低于区间内所有此前收盘价');
+  });
   it('keeps the last successful dataset when the latest scan fails, with Chinese labels', async () => {
     mocks.dashboard.mockResolvedValue({
       latest: run,
@@ -102,7 +151,7 @@ describe('Trend Radar', () => {
   it('offers only read-only result filters and no login or scan control', async () => {
     mount(<TrendRadarPage />);
     expect(await screen.findByText('示例股票')).toBeInTheDocument();
-    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /抓取|扫描|登录/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: '扫描控制' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('邮箱')).not.toBeInTheDocument();
   });

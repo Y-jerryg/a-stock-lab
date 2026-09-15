@@ -9,14 +9,18 @@ class Model(BaseModel):
     model_config = ConfigDict(frozen=True, allow_inf_nan=False)
 
 
-class Heat(Model):
+class ListedStock(Model):
     symbol: str = Field(pattern=r"^\d{6}$")
     name: str = Field(min_length=1)
-    heat_score: float = Field(ge=0)
+    fetched_at: AwareDatetime
+
+
+class Heat(ListedStock):
+    heat_score: float | None = Field(default=None, ge=0)
+    # Zero denotes unavailable attention rank, never an invented ranking position.
     heat_rank: int = Field(default=0, ge=0)
     heat_source: str
-    data_date: date
-    fetched_at: AwareDatetime
+    data_date: date | None = None
 
 
 class Bar(Model):
@@ -64,6 +68,16 @@ class Contraction(Model):
 
 class Candidate(Heat, Trend, Contraction):
     pass
+
+
+def candidate_order(row: Candidate, top_n: int) -> tuple[bool, bool, float, int, str]:
+    return (
+        not 0 < row.heat_rank <= top_n,
+        not row.is_strong_volume_contraction,
+        row.volume_ratio,
+        row.heat_rank or 100000,
+        row.symbol,
+    )
 
 
 class StockFailure(Model):

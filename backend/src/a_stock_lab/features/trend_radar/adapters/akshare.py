@@ -13,10 +13,11 @@ from pydantic import ValidationError
 from a_stock_lab.features.trend_radar.adapters.diagnostics import redact
 from a_stock_lab.features.trend_radar.application.diagnostics import stock_context
 from a_stock_lab.features.trend_radar.config import TrendSettings
-from a_stock_lab.features.trend_radar.domain.models import Bar, Heat, TrendError
+from a_stock_lab.features.trend_radar.domain.models import Bar, Heat, ListedStock, TrendError
 
 logger = logging.getLogger(__name__)
 PROVIDERS = {
+    "universe": ("exchange_a_share_list", "https://www.sse.com.cn/assortment/stock/list/share/"),
     "bars": ("eastmoney_daily_qfq", "https://push2his.eastmoney.com/api/qt/stock/kline/get"),
     "bars-sina": ("sina_daily_qfq", "https://finance.sina.com.cn/realstock/company/"),
     "heat": ("eastmoney_attention_index", "https://datacenter-web.eastmoney.com/api/data/v1/get"),
@@ -151,6 +152,29 @@ class AkShareTrendProvider:
             return result
         except (KeyError, ValueError, TypeError, ValidationError):
             raise TrendError("provider_malformed_heat") from None
+
+    def fetch_universe(self) -> list[ListedStock]:
+        """Exchange lists include Shanghai, Shenzhen and Beijing, independent of attention."""
+        fetched_at = datetime.now(UTC)
+        try:
+            rows = [
+                ListedStock(
+                    symbol=str(row["code"]).zfill(6),
+                    name=str(row["name"]),
+                    fetched_at=fetched_at,
+                )
+                for row in self._fetch("universe")
+            ]
+        except (KeyError, ValueError, TypeError, ValidationError):
+            raise TrendError("provider_malformed_universe") from None
+        # Fail on partial/empty exchange listings instead of claiming a full-market scan.
+        if len(rows) < 4000 or len({row.symbol for row in rows}) != len(rows):
+            raise TrendError("incomplete_a_share_universe")
+        if not all(
+            any(row.symbol.startswith(prefix) for row in rows) for prefix in ("6", "0", "920")
+        ):
+            raise TrendError("incomplete_a_share_universe")
+        return sorted(rows, key=lambda row: row.symbol)
 
     def fetch_bars(self, symbol: str, start: date, end: date) -> list[Bar]:
         fetched_at = datetime.now(UTC)

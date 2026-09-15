@@ -1,0 +1,39 @@
+# Optional PC-hosted HTTPS API. Start with scripts/public-website.ps1, not by default.
+services:
+  public-api:
+    image: nginx:1.29-alpine
+    restart: unless-stopped
+    environment:
+      PAGES_ORIGIN: ${PUBLIC_PAGES_ORIGIN:?Start with scripts/public-website.ps1}
+    volumes:
+      - ./deploy/public-api/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./deploy/public-api/backend-proxy.conf:/etc/nginx/snippets/backend-proxy.conf:ro
+    # Reachable within the Docker network; no new host ports are published.
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /etc/nginx/conf.d
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, wget, -qO-, http://127.0.0.1/healthz]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    logging:
+      driver: json-file
+      options: {max-size: 5m, max-file: "2"}
+
+  public-tunnel:
+    image: cloudflare/cloudflared@sha256:b269e8abd07a5bf6f3f4be65d5050b2174eca89c56a0241a8ff32a16aec454e4
+    restart: unless-stopped
+    command: [tunnel, --no-autoupdate, --protocol, http2, --url, http://public-api:80]
+    depends_on:
+      public-api:
+        condition: service_healthy
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    logging:
+      driver: json-file
+      options: {max-size: 5m, max-file: "2"}
