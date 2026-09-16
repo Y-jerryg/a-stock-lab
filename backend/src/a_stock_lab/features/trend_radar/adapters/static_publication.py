@@ -1,3 +1,4 @@
+import logging
 import os
 import tempfile
 from datetime import UTC, datetime
@@ -17,6 +18,9 @@ from a_stock_lab.features.trend_radar.domain.publication import (
     PublicRunDetails,
     PublicStockDetail,
 )
+
+logger = logging.getLogger(__name__)
+MAX_BUNDLE_BYTES = 50 * 1024 * 1024
 
 
 def atomic_write(path: Path, content: str) -> None:
@@ -38,6 +42,28 @@ def atomic_write(path: Path, content: str) -> None:
 class StaticResultPublisher:
     def __init__(self, source: LocalRepository, directory: Path) -> None:
         self.source, self.directory = source, directory
+
+    def publish_progress(self) -> None:
+        """Update small progress metadata, without re-reading immutable historical bars."""
+        runs = sorted(
+            self.source.public_runs(), key=lambda run: (run.started_at, str(run.id)), reverse=True
+        )
+        completed = [run for run in runs if run.status in COMPLETED_STATUSES]
+        if any(
+            not (self.directory / folder / f"{run.id}.json").is_file()
+            for run in completed
+            for folder in ("runs", "details")
+        ):
+            self.publish()
+            return
+        atomic_write(
+            self.directory / "index.json",
+            PublicIndex(
+                generated_at=datetime.now(UTC),
+                attempts=[PublicRun.from_run(run) for run in runs],
+                latest=PublicRun.from_run(completed[0]) if completed else None,
+            ).model_dump_json(),
+        )
 
     def publish(self) -> None:
         runs = sorted(
@@ -68,6 +94,18 @@ class StaticResultPublisher:
                         for row in results
                     ],
                 )
+                # Validate all saved evidence above, then publish only the calculation window.
+                # PostgreSQL retains the full original scan inputs.
+                parameters = details.run.payload.configuration_snapshot
+                window = parameters.max_days + parameters.baseline_volume_days
+                details = details.model_copy(
+                    update={
+                        "details": [
+                            item.model_copy(update={"bars": item.bars[-window:]})
+                            for item in details.details
+                        ]
+                    }
+                )
                 detail_content = details.model_dump_json()
                 detail_target = self.directory / "details" / f"{run.id}.json"
                 if (
@@ -97,12 +135,32 @@ class StaticResultPublisher:
         self.publish()
         index_path = self.directory / "index.json"
         index = PublicIndex.model_validate_json(index_path.read_text(encoding="utf-8"))
+        size = len(index.model_dump_json().encode("utf-8"))
+        retained = []
+        full = False
+        for run in index.attempts:
+            if run.status not in COMPLETED_STATUSES:
+                retained.append(run)
+                continue
+            run_size = sum(
+                (self.directory / folder / f"{run.id}.json").stat().st_size
+                for folder in ("runs", "details")
+            )
+            if full or size + run_size > MAX_BUNDLE_BYTES:
+                if index.latest and run.id == index.latest.id:
+                    raise TrendError("publication_latest_exceeds_bundle_limit")
+                full = True
+                logger.info("trend_public_history_omitted", extra={"run_id": str(run.id)})
+                continue
+            size += run_size
+            retained.append(run)
+        index = index.model_copy(update={"attempts": retained})
         destination.parent.mkdir(parents=True, exist_ok=True)
         descriptor, temporary = tempfile.mkstemp(dir=destination.parent, suffix=".zip")
         os.close(descriptor)
         try:
             with ZipFile(temporary, "w", compression=ZIP_DEFLATED) as archive:
-                archive.write(index_path, "index.json")
+                archive.writestr("index.json", index.model_dump_json())
                 for run in index.attempts:
                     if run.status in COMPLETED_STATUSES:
                         relative = f"runs/{run.id}.json"

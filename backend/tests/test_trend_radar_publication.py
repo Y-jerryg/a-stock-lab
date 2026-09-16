@@ -79,6 +79,69 @@ def test_historical_rules_remain_legacy_when_exported(tmp_path: Path) -> None:
     assert config["max_pullback_days"] == 3 and config["max_single_pullback_pct"] == 1.5
 
 
+def test_progress_export_does_not_read_historical_evidence(tmp_path: Path) -> None:
+    memory = Memory()
+    assert service(memory).scan("cli")
+    publisher = StaticResultPublisher(memory, tmp_path)
+    publisher.publish()
+    memory.candidate_inputs = Mock(side_effect=AssertionError("no historical IO"))  # type: ignore[method-assign]
+    memory.public_results = Mock(side_effect=AssertionError("no historical IO"))  # type: ignore[method-assign]
+    publisher.publish_progress()
+
+
+def test_bundle_keeps_latest_and_bounds_public_history(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memory = Memory()
+    old = service(memory).scan("cli")
+    latest = service(memory, NOW + timedelta(minutes=1)).scan("cli")
+    assert old and latest
+    publisher = StaticResultPublisher(memory, tmp_path / "export")
+    publisher.publish()
+    index_size = (publisher.directory / "index.json").stat().st_size
+    latest_size = sum(
+        (publisher.directory / folder / f"{latest.id}.json").stat().st_size
+        for folder in ("runs", "details")
+    )
+    limit = index_size + latest_size + 10
+    monkeypatch.setattr(
+        "a_stock_lab.features.trend_radar.adapters.static_publication.MAX_BUNDLE_BYTES", limit
+    )
+    destination = tmp_path / "bounded.zip"
+    publisher.bundle(destination)
+    with ZipFile(destination) as archive:
+        assert sum(item.file_size for item in archive.infolist()) <= limit
+        index = json.loads(archive.read("index.json"))
+        assert index["latest"]["id"] == str(latest.id)
+        assert [run["id"] for run in index["attempts"]] == [str(latest.id)]
+        assert f"runs/{old.id}.json" not in archive.namelist()
+    # Public retention never removes local history or the previous valid bundle on failure.
+    assert len(memory.public_runs()) == 2
+    previous = destination.read_bytes()
+    monkeypatch.setattr(
+        "a_stock_lab.features.trend_radar.adapters.static_publication.MAX_BUNDLE_BYTES", 1
+    )
+    with pytest.raises(TrendError, match="publication_latest_exceeds_bundle_limit"):
+        publisher.bundle(destination)
+    assert destination.read_bytes() == previous
+
+
+def test_published_chart_is_bounded_without_changing_saved_evidence(tmp_path: Path) -> None:
+    memory = Memory()
+    run = service(memory).scan("cli")
+    assert run
+    bars = memory.inputs[run.id]["600000"]
+    older = [
+        bar.model_copy(update={"trade_date": bar.trade_date - timedelta(days=29)}) for bar in bars
+    ]
+    memory.inputs[run.id]["600000"] = older + bars
+    StaticResultPublisher(memory, tmp_path).publish()
+    detail = json.loads((tmp_path / "details" / f"{run.id}.json").read_text())
+    assert len(detail["details"][0]["bars"]) == 29
+    assert len(memory.inputs[run.id]["600000"]) == 58
+
+
 def test_publication_prioritizes_attention_before_volume(tmp_path: Path) -> None:
     memory = Batch(set())
     memory.heat = memory.heat[:2]

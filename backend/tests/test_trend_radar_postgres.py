@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Iterator
+from datetime import timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -133,3 +134,21 @@ def test_local_migration_lock_and_idempotent_writes(database: Engine, tmp_path: 
     )
     original = next(item for item in detail.details if item.candidate.symbol == "600000")
     assert len(original.bars) == 29 and original.bars[0].source == "eastmoney_daily_qfq"
+    # Prior-day cache is reusable across dates; timestamps cannot leak future knowledge.
+    tomorrow = NOW + timedelta(days=1)
+    assert repository.load_bars("600000", tomorrow.date(), tomorrow) == refreshed
+    assert repository.load_bars("600000", NOW.date(), NOW - timedelta(seconds=1)) is None
+    repository.save_bars("600000", tomorrow.date(), refreshed)
+    repository.prune_bars(refreshed[-5].trade_date)
+    assert len(repository.load_bars("600000", tomorrow.date(), tomorrow) or []) == 5
+    with database.connect() as connection:
+        assert (
+            connection.scalar(
+                text(
+                    "select count(distinct vintage_date) from trend_daily_bars "
+                    "where symbol='600000'"
+                )
+            )
+            == 1
+        )
+    assert len(repository.candidate_inputs(partial.id)["600000"]) == 29

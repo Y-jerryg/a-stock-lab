@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { text } from '../../locales';
 import { readDashboard, readResults, type Result } from './api';
-import { marketTime, percent } from './format';
+import { isMildRebound, marketTime, percent } from './format';
 import './trend.css';
 
 const t = text.trend;
@@ -35,6 +35,7 @@ function StockCard({ stock, runId, topN }: { stock: Result; runId: string; topN:
         </div>
         <div className="trend-badges">
           {popular && <b className="trend-attention-badge">关注度前 {topN}</b>}
+          {isMildRebound(stock.max_pullback_pct) && <b className="trend-mild-badge">反弹均 ≤ 2%</b>}
           <b className="trend-badge">{t.status[stock.highlight_level]}</b>
         </div>
       </header>
@@ -79,6 +80,8 @@ export function TrendRadarPage() {
     setSearchParams(value ? { run: value } : {});
   };
   const [strong, setStrong] = useState(false);
+  const [mild, setMild] = useState(false);
+  const [rebounds, setRebounds] = useState('all');
   const [days, setDays] = useState(0);
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -104,10 +107,12 @@ export function TrendRadarPage() {
     results.data?.filter(
       (row) =>
         (!strong || row.is_strong_volume_contraction) &&
+        (!mild || isMildRebound(row.max_pullback_pct)) &&
+        (rebounds === 'all' || row.pullback_days === Number(rebounds)) &&
         (!days || row.trend_days === days) &&
         `${row.symbol} ${row.name}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()),
     ) ?? [];
-  const context = `${run?.id ?? ''}|${String(strong)}|${String(days)}|${search}`;
+  const context = `${run?.id ?? ''}|${String(strong)}|${String(mild)}|${rebounds}|${String(days)}|${search}`;
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
   const currentPage = context === pageContext ? Math.min(page, pageCount) : 1;
   const visible = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
@@ -194,6 +199,34 @@ export function TrendRadarPage() {
               </p>
             )}
           <div className="trend-filters">
+            <label>
+              反弹幅度类型
+              <select
+                value={mild ? 'mild' : 'all'}
+                onChange={(event) => {
+                  setMild(event.target.value === 'mild');
+                }}
+              >
+                <option value="all">全部幅度</option>
+                <option value="mild">反弹均 ≤ 2%（含无反弹）</option>
+              </select>
+            </label>
+            <label>
+              回调（反弹）天数
+              <select
+                value={rebounds}
+                onChange={(event) => {
+                  setRebounds(event.target.value);
+                }}
+              >
+                <option value="all">全部天数</option>
+                {[0, 1, 2].map((count) => (
+                  <option key={count} value={count}>
+                    {count} 天反弹
+                  </option>
+                ))}
+              </select>
+            </label>
             <label>
               搜索股票
               <input
@@ -302,6 +335,10 @@ export function TrendRadarPage() {
           {config && (
             <aside className="trend-explanation">
               <h2>{t.rules}</h2>
+              <p>
+                “反弹均 ≤ 2%”是独立高亮类型，包含 0 天反弹；超过 2%
+                的股票仍可入选。回调（反弹）天数指趋势区间内收盘价高于前一交易日的天数，可与强缩量、趋势天数组合筛选。
+              </p>
               <p>
                 {t.explanation(
                   config.top_n,

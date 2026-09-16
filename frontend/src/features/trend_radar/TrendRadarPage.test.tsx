@@ -81,6 +81,28 @@ beforeEach(() => {
   mocks.results.mockResolvedValue([stock]);
 });
 describe('Trend Radar', () => {
+  it('combines rebound-day and mild-amplitude filters without excluding larger rebounds by default', async () => {
+    mocks.results.mockResolvedValue([
+      { ...stock, symbol: '600001', name: '零反弹', pullback_days: 0, max_pullback_pct: 0 },
+      { ...stock, symbol: '600002', name: '边界反弹', pullback_days: 1, max_pullback_pct: 2 },
+      { ...stock, symbol: '600003', name: '较大反弹', pullback_days: 2, max_pullback_pct: 2.01 },
+    ]);
+    mount(<TrendRadarPage />);
+    expect(await screen.findByText('较大反弹')).toBeInTheDocument();
+    expect(screen.getAllByText('反弹均 ≤ 2%')).toHaveLength(2);
+    fireEvent.change(screen.getByLabelText('回调（反弹）天数'), { target: { value: '0' } });
+    expect(screen.getByText('零反弹')).toBeInTheDocument();
+    expect(screen.queryByText('边界反弹')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('回调（反弹）天数'), { target: { value: '1' } });
+    expect(screen.getByText('边界反弹')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('回调（反弹）天数'), { target: { value: '2' } });
+    expect(screen.getByText('较大反弹')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('反弹幅度类型'), { target: { value: 'mild' } });
+    expect(screen.queryByText('较大反弹')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('回调（反弹）天数'), { target: { value: 'all' } });
+    expect(screen.getByText('零反弹')).toBeInTheDocument();
+    expect(screen.getByText('边界反弹')).toBeInTheDocument();
+  });
   it('paginates a full-market result and searches across all pages', async () => {
     mocks.results.mockResolvedValue(
       Array.from({ length: 65 }, (_, i) => ({

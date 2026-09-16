@@ -1,5 +1,9 @@
 import { locale, text } from '../../locales';
 
+export function isMildRebound(maxPullbackPct: number) {
+  return Number.isFinite(maxPullbackPct) && maxPullbackPct >= 0 && maxPullbackPct <= 2 + 1e-8;
+}
+
 export function marketTime(value: string | null | undefined) {
   if (!value) return text.trend.missing;
   return (

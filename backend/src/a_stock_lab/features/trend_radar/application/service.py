@@ -4,6 +4,7 @@ from datetime import UTC, date, datetime, time
 from typing import Literal
 from zoneinfo import ZoneInfo
 
+from a_stock_lab.features.trend_radar.application.bar_cache import resolve_bars
 from a_stock_lab.features.trend_radar.application.contracts import (
     HeatProvider,
     LocalRepository,
@@ -147,6 +148,7 @@ class TrendRadarScanService:
         if len(completed) < required:
             raise TrendError("insufficient_calendar_history")
         trade_date = completed[-1]
+        self.local.prune_bars(completed[-required])
         run = run.model_copy(update={"trade_date": trade_date})
         self.local.save_run(run)
         remember(run)
@@ -207,13 +209,17 @@ class TrendRadarScanService:
             # Database failures are global, not provider failures: keep cache IO outside
             # the stock-error boundary so outages never become 300 skipped stocks.
             bars = self.local.load_bars(stock.symbol, trade_date, self.clock())
-            fetched = bars is None
+            cache_mode = "full"
             try:
                 with scanning_stock(**context):
-                    if bars is None:
-                        bars = self.market.fetch_bars(
-                            stock.symbol, completed[-min(len(completed), required + 30)], trade_date
-                        )
+                    bars, cache_mode = resolve_bars(
+                        self.market,
+                        stock.symbol,
+                        completed[-required:],
+                        bars,
+                        self.clock(),
+                        self.config.trend_cache_refresh_days,
+                    )
                 dates = [bar.trade_date for bar in bars]
                 if (
                     dates != sorted(set(dates))
@@ -249,7 +255,7 @@ class TrendRadarScanService:
                 )
             else:
                 assert bars
-                if fetched:
+                if cache_mode != "hit":
                     self.local.save_bars(stock.symbol, trade_date, bars)
                 sources.update(bar.source for bar in bars)
                 successful += 1
@@ -278,13 +284,14 @@ class TrendRadarScanService:
             remember(run)
             if index % 10 == 0:
                 try:
-                    self.publisher.publish()
+                    self.publisher.publish_progress()
                 except Exception:
                     logger.warning("trend_progress_export_failed", extra={"run_id": str(run.id)})
             logger.info(
                 "trend_scan_stock_completed",
                 extra={
                     **context,
+                    "cache_mode": cache_mode,
                     "successful": successful,
                     "failed": len(failures),
                     "candidate_count": len(results),

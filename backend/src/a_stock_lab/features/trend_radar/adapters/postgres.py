@@ -1,9 +1,9 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from uuid import UUID, uuid5
 
-from sqlalchemy import Engine, delete, select, text
+from sqlalchemy import Engine, delete, func, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -152,14 +152,19 @@ class PostgresTrendRepository:
 
     def load_bars(self, symbol: str, vintage: date, now: datetime) -> list[Bar] | None:
         with Session(self.engine) as session:
+            latest = (
+                select(func.max(TrendBarRecord.vintage_date))
+                .where(TrendBarRecord.symbol == symbol, TrendBarRecord.vintage_date <= vintage)
+                .scalar_subquery()
+            )
             records = session.scalars(
                 select(TrendBarRecord)
-                .where(TrendBarRecord.symbol == symbol, TrendBarRecord.vintage_date == vintage)
+                .where(TrendBarRecord.symbol == symbol, TrendBarRecord.vintage_date == latest)
                 .order_by(TrendBarRecord.trade_date)
             ).all()
             bars = [Bar.model_validate(row.payload) for row in records]
-            # Short cache also permits same-day corrections; never mix adjustment vintages.
-            if bars and now - min(bar.fetched_at for bar in bars) < timedelta(hours=6):
+            # Application validates overlap before combining adjustment vintages.
+            if bars and all(bar.fetched_at <= now for bar in bars):
                 return bars
             return None
 
@@ -169,7 +174,7 @@ class PostgresTrendRepository:
         with self.engine.begin() as connection:
             connection.execute(
                 delete(TrendBarRecord).where(
-                    TrendBarRecord.symbol == symbol, TrendBarRecord.vintage_date == vintage
+                    TrendBarRecord.symbol == symbol, TrendBarRecord.vintage_date <= vintage
                 )
             )
             statement = insert(TrendBarRecord).values(
@@ -187,6 +192,19 @@ class PostgresTrendRepository:
                 statement.on_conflict_do_update(
                     index_elements=["symbol", "trade_date", "vintage_date"],
                     set_={"payload": statement.excluded.payload},
+                )
+            )
+
+    def prune_bars(self, before: date) -> None:
+        # Only the mutable cache is pruned; per-run evidence and artifacts stay immutable.
+        with self.engine.begin() as connection:
+            connection.execute(delete(TrendBarRecord).where(TrendBarRecord.trade_date < before))
+            connection.execute(
+                text(
+                    "DELETE FROM trend_daily_bars AS old USING "
+                    "(SELECT symbol, max(vintage_date) AS latest FROM trend_daily_bars "
+                    "GROUP BY symbol) AS current "
+                    "WHERE old.symbol=current.symbol AND old.vintage_date < current.latest"
                 )
             )
 

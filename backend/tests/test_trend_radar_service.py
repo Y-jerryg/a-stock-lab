@@ -63,6 +63,12 @@ class Memory:
     def save_bars(self, symbol: str, vintage: date, bars: list[Bar]) -> None:
         pass
 
+    def prune_bars(self, before: date) -> None:
+        pass
+
+    def publish_progress(self) -> None:
+        self.publish()
+
     def checkpoint(self, run: ScanRun, candidate: Candidate | None, bars: list[Bar]) -> None:
         self.save_run(run)
         if candidate:

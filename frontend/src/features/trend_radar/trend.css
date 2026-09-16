@@ -340,3 +340,13 @@
     flex-wrap: wrap;
   }
 }
+.trend-mild-badge {
+  display: inline-block;
+  padding: 0.3rem 0.55rem;
+  border: 1px solid #bdb4ed;
+  border-radius: 0.4rem;
+  background: #f0edff;
+  color: #5540a0;
+  font-size: 0.75rem;
+  margin: 0.15rem;
+}

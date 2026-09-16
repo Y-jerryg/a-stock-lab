@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { lazy, Suspense, useEffect } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { readRunDetails } from './api';
-import { marketTime, percent } from './format';
+import { isMildRebound, marketTime, percent } from './format';
 import './trend.css';
 
 const DailyChart = lazy(async () => {
@@ -115,6 +115,7 @@ export function TrendStockDetailPage() {
           {stock.heat_rank > 0 && stock.heat_rank <= config.top_n && (
             <b className="trend-attention-badge">关注度前 {config.top_n}</b>
           )}
+          {isMildRebound(stock.max_pullback_pct) && <b className="trend-mild-badge">反弹均 ≤ 2%</b>}
         </div>
         {latest && (
           <div className={`trend-quote ${changeClass}`}>
