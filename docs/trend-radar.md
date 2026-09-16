@@ -191,16 +191,18 @@ docker compose --profile trend stop trend-worker
 Use qfq prices, volume in lots and amount in yuan. After exhausted Eastmoney request errors, use
 Sina qfq daily bars for the entire lookback, converting Sina shares to lots and retaining its source.
 The primary has a five-minute cooldown; each source has bounded retries and a hard process timeout.
-Ratios are dimensionless. Fetch the required lookback plus 30 sessions. Refresh a coherent
-qfq lookback for each new session vintage rather than mixing pre/post-corporate-action adjustments.
-Same-vintage requests reuse bars for six hours. Candidate input bars remain immutable per run even
-if the cache is refreshed. `data_as_of` is collection completion; `trade_date` is the completed bar
-session. This live scanner is not a historical backtest tool.
+Ratios are dimensionless. Keep only max trend days plus baseline sessions (29 by default).
+Reuse complete cached windows; fetch missing ranges with three overlapping observations to check
+qfq/source consistency. Changed overlap or a seven-day-old retained observation triggers a full
+window refresh. Candidate inputs remain immutable per run even if the cache is refreshed or pruned.
+`data_as_of` is collection completion; `trade_date` is the completed bar session. This live scanner
+is not a historical backtest tool. See ADR 0024 for the bounded correction and publication policy.
 
 容错和日志的完整决定见 [ADR 0018](adr/0018-trend-radar-partial-completion.md)。休市日手动抓取
 自动使用真实日历中最近已收盘的交易日，盘中也使用上一已完成交易日；不会生成休市日日线。
 每只股票处理后将进度、候选和输入证据保存到数据库，全局失败也保留这些记录。再次抓取时
-可复用同一交易日六小时内的有效缓存，但会重新抓热度，不把它称为同一次扫描断点续跑。
+可复用已完成交易日的有效缓存，缺失部分补齐，按周期检查历史修正；每次仍重新抓热度，
+不把它称为同一次扫描断点续跑。
 日志包含 `trend_provider_attempt_failed`、`trend_scan_stock_failed` 的原始异常类型、消息、
 完整堆栈和 URL，以及股票序号、代码、名称、重试次数、run_id。详细日志只保存在电脑端。
 
