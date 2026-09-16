@@ -21,6 +21,7 @@ export interface TailRadarRun {
   actual_finished_at: string | null;
   status: RunStatus;
   screening_rule_version: string;
+  rule_configuration: { pct_change_min: number; pct_change_max: number };
   is_official: boolean;
   evaluated_record_count: number | null;
   invalid_record_count: number | null;

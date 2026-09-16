@@ -96,7 +96,7 @@ export function CandidateDetailPage() {
               <Field label="开盘价" value={formatNumber(snapshot.open)} />
               <Field label="最高价" value={formatNumber(snapshot.high)} />
               <Field label="最低价" value={formatNumber(snapshot.low)} />
-              <Field label="成交量" value={formatInteger(snapshot.volume)} />
+              <Field label="成交量（股）" value={formatInteger(snapshot.volume)} />
               <Field label="成交额" value={formatCompactMoney(snapshot.amount)} />
               <Field
                 label="换手率"
@@ -122,6 +122,10 @@ export function CandidateDetailPage() {
                 value={formatShanghaiTime(candidate.snapshot_evidence.actual_fetch_finished_at)}
               />
               <Field label="筛选规则版本" value={candidate.screening_rule_version} mono />
+              <Field
+                label="入选涨幅范围（含边界）"
+                value={`${String(candidate.rule_configuration.pct_change_min)}%～${String(candidate.rule_configuration.pct_change_max)}%`}
+              />
             </div>
           </CardContent>
         </Card>
@@ -133,7 +137,7 @@ export function CandidateDetailPage() {
             <div>
               <SectionLabel tone="deterministic">确定性计算</SectionLabel>
               <h2 id="deterministic-title" className="mt-2 text-base font-semibold">
-                日内特征分析
+                5 分钟 K 线、成交量与日内特征
               </h2>
             </div>
             {intraday && (
@@ -156,7 +160,14 @@ export function CandidateDetailPage() {
                       <div className="h-80 animate-pulse rounded-md bg-[var(--surface-subtle)]" />
                     }
                   >
-                    <IntradayChart bars={intraday.used_bars} symbol={candidate.symbol} />
+                    <div>
+                      <p className="mb-3 text-xs text-[var(--text-muted)]">
+                        不复权 5 分钟 K 线 · 下方为成交量（股）· 红涨绿跌。 仅展示截至{' '}
+                        {formatShanghaiTime(intraday.analysis_as_of)}{' '}
+                        已保存的数据，鼠标悬停可查看开高低收与成交量。
+                      </p>
+                      <IntradayChart bars={intraday.used_bars} symbol={candidate.symbol} />
+                    </div>
                   </Suspense>
                 ) : (
                   <div className="grid h-72 place-items-center rounded-md bg-[var(--surface-muted)] text-sm text-[var(--text-muted)]">

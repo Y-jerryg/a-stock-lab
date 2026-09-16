@@ -107,7 +107,7 @@ def candidate_data() -> TailRadarCandidateData:
         exchange=AShareExchange.SHANGHAI,
         name="浦发银行",
         price=10.25,
-        pct_change=2.5,
+        pct_change=4.0,
         amount=100_000_000,
         provider="fixture",
         fetched_at=FETCH_FINISHED,
@@ -138,7 +138,7 @@ def candidate_data() -> TailRadarCandidateData:
             decision=TailRadarScreeningDecision(
                 outcome=TailRadarDecisionOutcome.INCLUDED,
                 reason=TailRadarDecisionReason.PCT_CHANGE_IN_RANGE,
-                observed_pct_change=2.5,
+                observed_pct_change=4.0,
                 observed_price=10.25,
             ),
         ),
@@ -427,21 +427,21 @@ def test_public_candidate_reads_preserve_explanatory_snapshot_evidence(
     detail = client.get(f"/api/v1/tail-radar/candidates/{CANDIDATE_ID}")
 
     assert candidates.status_code == 200
-    assert candidates.json()["items"][0]["pct_change"] == 2.5
+    assert candidates.json()["items"][0]["pct_change"] == 4.0
     assert candidates.json()["items"][0]["price"] == 10.25
     assert candidates.json()["items"][0]["board"] == "shanghai_main"
     assert detail.status_code == 200
     payload = detail.json()
     assert payload["snapshot_data"]["symbol"] == "600000"
     assert payload["board"] == "shanghai_main"
-    assert payload["snapshot_data"]["pct_change"] == 2.5
+    assert payload["snapshot_data"]["pct_change"] == 4.0
     assert payload["decision"] == {
         "outcome": "included",
         "reason": "pct_change_in_inclusive_range",
-        "observed_pct_change": 2.5,
+        "observed_pct_change": 4.0,
         "observed_price": 10.25,
-        "inclusive_min": 2.0,
-        "inclusive_max": 3.0,
+        "inclusive_min": 3.0,
+        "inclusive_max": 5.0,
     }
     assert payload["snapshot_evidence"]["actual_fetch_finished_at"].endswith("+08:00")
     assert "storage_key" not in payload["snapshot_evidence"]

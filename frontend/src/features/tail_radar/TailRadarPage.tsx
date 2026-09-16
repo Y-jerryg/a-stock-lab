@@ -117,7 +117,7 @@ export function TailRadarPage() {
         <Metric
           label="候选数量"
           value={formatInteger(run.candidate_count)}
-          hint="涨幅含边界 +2.00% 至 +3.00%"
+          hint={`${run.screening_rule_version === 'tail-radar-screen-v1' ? '历史规则：' : ''}涨幅含边界 +${run.rule_configuration.pct_change_min.toFixed(2)}% 至 +${run.rule_configuration.pct_change_max.toFixed(2)}%`}
         />
         <Metric
           label="工作流状态"

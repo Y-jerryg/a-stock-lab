@@ -85,14 +85,14 @@ def record(
 @pytest.mark.parametrize(
     ("pct_change", "expected"),
     [
-        (1.99, False),
-        (2.00, True),
-        (2.50, True),
+        (2.99, False),
         (3.00, True),
-        (3.01, False),
+        (4.00, True),
+        (5.00, True),
+        (5.01, False),
     ],
 )
-def test_tail_radar_v1_exact_inclusive_boundaries(
+def test_tail_radar_v2_exact_inclusive_boundaries(
     pct_change: float,
     expected: bool,
 ) -> None:
@@ -111,11 +111,11 @@ def test_tail_radar_v1_exact_inclusive_boundaries(
     )
 
 
-def test_v1_requires_snapshot_pct_change_and_positive_price_evidence() -> None:
+def test_v2_requires_snapshot_pct_change_and_positive_price_evidence() -> None:
     rule = TailRadarScreeningRule()
 
     missing_snapshot = rule.evaluate(
-        TailRadarScreeningInput(record=record(pct_change=2.5), snapshot_evidence=None)
+        TailRadarScreeningInput(record=record(pct_change=4.0), snapshot_evidence=None)
     )
     missing_pct = rule.evaluate(
         TailRadarScreeningInput(
@@ -125,7 +125,7 @@ def test_v1_requires_snapshot_pct_change_and_positive_price_evidence() -> None:
     )
     invalid_price = rule.evaluate(
         TailRadarScreeningInput(
-            record=record(pct_change=2.5, price=0),
+            record=record(pct_change=4.0, price=0),
             snapshot_evidence=snapshot_evidence(),
         )
     )
@@ -137,13 +137,13 @@ def test_v1_requires_snapshot_pct_change_and_positive_price_evidence() -> None:
         TailRadarDecisionOutcome.INVALID
     }
     with pytest.raises(ValidationError):
-        record(symbol="not-a-symbol", pct_change=2.5)
+        record(symbol="not-a-symbol", pct_change=4.0)
 
 
-def test_v1_does_not_silently_apply_future_optional_filters() -> None:
+def test_v2_does_not_silently_apply_future_optional_filters() -> None:
     decision = TailRadarScreeningRule().evaluate(
         TailRadarScreeningInput(
-            record=record(pct_change=2.5),
+            record=record(pct_change=4.0),
             snapshot_evidence=snapshot_evidence(),
         )
     )
@@ -151,7 +151,7 @@ def test_v1_does_not_silently_apply_future_optional_filters() -> None:
     assert decision.included is True
     with pytest.raises(ValidationError, match="optional Tail Radar filters are disabled"):
         TailRadarScreeningConfiguration(exclude_st=True)
-    with pytest.raises(ValidationError, match=r"inclusive 2\.00 to 3\.00"):
+    with pytest.raises(ValidationError, match=r"inclusive 3\.00 to 5\.00"):
         TailRadarScreeningConfiguration(pct_change_min=1.5)
 
 
@@ -160,7 +160,7 @@ def test_persisted_included_decision_must_be_coherent_with_the_rule_range() -> N
         TailRadarScreeningDecision(
             outcome=TailRadarDecisionOutcome.INCLUDED,
             reason=TailRadarDecisionReason.PCT_CHANGE_IN_RANGE,
-            observed_pct_change=3.01,
+            observed_pct_change=5.01,
             observed_price=10,
         )
 
@@ -168,11 +168,11 @@ def test_persisted_included_decision_must_be_coherent_with_the_rule_range() -> N
 def test_candidate_payload_rejects_cross_provider_snapshot_evidence() -> None:
     decision = TailRadarScreeningRule().evaluate(
         TailRadarScreeningInput(
-            record=record(pct_change=2.5),
+            record=record(pct_change=4.0),
             snapshot_evidence=snapshot_evidence(),
         )
     )
-    mismatched_record = record(pct_change=2.5).model_copy(update={"provider": "other"})
+    mismatched_record = record(pct_change=4.0).model_copy(update={"provider": "other"})
 
     with pytest.raises(ValidationError, match="provider must match"):
         TailRadarCandidatePayload(
@@ -182,6 +182,36 @@ def test_candidate_payload_rejects_cross_provider_snapshot_evidence() -> None:
             snapshot_record=mismatched_record,
             decision=decision,
         )
+
+
+def test_legacy_payload_keeps_original_range_and_rejects_version_relabeling() -> None:
+    legacy = TailRadarScreeningConfiguration(pct_change_min=2, pct_change_max=3)
+    rule = TailRadarScreeningRule(legacy)
+    row = record(pct_change=2.5)
+    decision = rule.evaluate(
+        TailRadarScreeningInput(record=row, snapshot_evidence=snapshot_evidence())
+    )
+    payload = TailRadarCandidatePayload(
+        screening_rule_version="tail-radar-screen-v1",
+        rule_configuration=legacy,
+        snapshot_evidence=snapshot_evidence(),
+        snapshot_record=row,
+        decision=decision,
+    )
+    restored = TailRadarCandidatePayload.model_validate_json(payload.model_dump_json())
+    assert restored.rule_configuration.pct_change_min == 2
+    assert restored.decision.included
+    assert rule.version == "tail-radar-screen-v1"
+    assert TailRadarScreeningRule().version == "tail-radar-screen-v2"
+    assert (
+        not TailRadarScreeningRule()
+        .evaluate(TailRadarScreeningInput(record=row, snapshot_evidence=snapshot_evidence()))
+        .included
+    )
+    raw = payload.model_dump()
+    raw["screening_rule_version"] = "tail-radar-screen-v2"
+    with pytest.raises(ValidationError, match="rule version must match"):
+        TailRadarCandidatePayload.model_validate(raw)
 
 
 def source_manifest(*, record_count: int) -> PersistedSnapshotManifest:
@@ -354,7 +384,7 @@ def test_service_screens_one_snapshot_persists_evidence_and_is_idempotent() -> N
     records = tuple(
         record(symbol=f"60000{index}", pct_change=pct, price=price)
         for index, (pct, price) in enumerate(
-            ((1.99, 10), (2.0, 10), (2.5, 11), (3.0, 12), (3.01, 10), (2.5, 0))
+            ((2.99, 10), (3.0, 10), (4.0, 11), (5.0, 12), (5.01, 10), (4.0, 0))
         )
     )
     source = source_manifest(record_count=len(records))
@@ -397,7 +427,7 @@ def test_service_rejects_non_official_or_missing_snapshot_before_claim() -> None
     repository = FakeRepository(None)
     service = TailRadarScreeningService(
         rule=TailRadarScreeningRule(),
-        reader=FakeReader(market_snapshot((record(pct_change=2.5),))),
+        reader=FakeReader(market_snapshot((record(pct_change=4.0),))),
         repository=cast(TailRadarRepository, repository),
     )
 
@@ -409,9 +439,9 @@ def test_service_rejects_non_official_or_missing_snapshot_before_claim() -> None
 
 def test_service_records_artifact_manifest_mismatch_as_failed() -> None:
     source = source_manifest(record_count=1)
-    mismatched = market_snapshot((record(pct_change=2.5),)).model_copy(
+    mismatched = market_snapshot((record(pct_change=4.0),)).model_copy(
         update={
-            "manifest": market_snapshot((record(pct_change=2.5),)).manifest.model_copy(
+            "manifest": market_snapshot((record(pct_change=4.0),)).manifest.model_copy(
                 update={"provider": "different-provider"}
             )
         }
@@ -467,7 +497,7 @@ def test_service_does_not_overwrite_an_uncertain_candidate_commit_with_failure()
     repository = UncertainRepository(source)
     service = TailRadarScreeningService(
         rule=TailRadarScreeningRule(),
-        reader=FakeReader(market_snapshot((record(pct_change=2.5),))),
+        reader=FakeReader(market_snapshot((record(pct_change=4.0),))),
         repository=cast(TailRadarRepository, repository),
         clock=iter((SCREEN_STARTED, SCREEN_FINISHED)).__next__,
     )

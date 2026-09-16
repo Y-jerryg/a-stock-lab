@@ -61,7 +61,7 @@ def candidate(candidate_id: UUID, symbol: str) -> TailRadarCandidateData:
         symbol=symbol,
         name=f"Fixture {symbol}",
         price=10.25,
-        pct_change=2.5,
+        pct_change=4.0,
         amount=10_000_000,
         turnover_rate=1.2,
         provider="fixture",
@@ -93,7 +93,7 @@ def candidate(candidate_id: UUID, symbol: str) -> TailRadarCandidateData:
             decision=TailRadarScreeningDecision(
                 outcome=TailRadarDecisionOutcome.INCLUDED,
                 reason=TailRadarDecisionReason.PCT_CHANGE_IN_RANGE,
-                observed_pct_change=2.5,
+                observed_pct_change=4.0,
                 observed_price=10.25,
             ),
         ),

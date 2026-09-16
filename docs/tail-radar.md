@@ -4,23 +4,30 @@ Phase 3 implements the first real Tail Radar rule. It screens one already-persis
 official full-market snapshot. It never monitors later quotes to add securities that were not in
 range in that snapshot.
 
-## Version-one rule
+## Current rule (version two)
 
-`TailRadarScreeningRule` version `tail-radar-screen-v1` consumes only normalized
+`TailRadarScreeningRule` version `tail-radar-screen-v2` consumes only normalized
 `MarketSnapshotRecord` values. A record is included exactly when:
 
 ```text
-2.00 <= pct_change <= 3.00
+3.00 <= pct_change <= 5.00
 ```
 
-The boundaries are inclusive: `1.99` and `3.01` are excluded; `2.00`, `2.50`, and `3.00` are
+The boundaries are inclusive: `2.99` and `5.01` are excluded; `3.00`, `4.00`, and `5.00` are
 included. The percentage uses percentage points, matching the normalized market-data contract.
 
 Before range evaluation, the record must have a six-digit symbol, finite percentage change,
 positive finite current price, and registered snapshot evidence. Invalid records are counted but
-never become candidates. Version one does not exclude ST names and does not apply amount,
+never become candidates. Version two does not exclude ST names and does not apply amount,
 float-market-cap, exchange, or board filters. Typed configuration contains disabled slots for these
-future filters and rejects attempts to enable them under the version-one identifier.
+future filters and rejects attempts to enable them under the current version identifier.
+
+Historical v1 artifacts keep their original inclusive 2–3 percent rule. New official snapshots use v2;
+existing candidate sets are not overwritten. See [ADR 0023](adr/0023-tail-radar-three-to-five-percent-and-candlesticks.md).
+
+Details show saved unadjusted **five-minute candlesticks and volume**, with linked zoom and OHLC/volume
+tooltips. Volume is shares (axis: ten-thousand shares), amount is RMB. Charts stop at the saved
+analysis cutoff and do not request live quotes. Artifacts without saved bars show an explicit empty state.
 
 ## Evidence and persistence
 

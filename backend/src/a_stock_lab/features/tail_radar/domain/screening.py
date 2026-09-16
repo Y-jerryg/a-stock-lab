@@ -16,17 +16,18 @@ from pydantic import (
 from a_stock_lab.core.time import as_market_timezone
 from a_stock_lab.shared.market_data.models import AShareExchange, MarketSnapshotRecord
 
-TAIL_RADAR_SCREENING_RULE_VERSION = "tail-radar-screen-v1"
+TAIL_RADAR_SCREENING_RULE_VERSION = "tail-radar-screen-v2"
+LEGACY_TAIL_RADAR_SCREENING_RULE_VERSION = "tail-radar-screen-v1"
 _SYMBOL_PATTERN = re.compile(r"^\d{6}$")
 
 
 class TailRadarScreeningConfiguration(BaseModel):
-    """Version-one criterion plus explicitly disabled future filter slots."""
+    """Current criterion, with the original range retained for historical reads."""
 
     model_config = ConfigDict(frozen=True)
 
-    pct_change_min: float = 2.0
-    pct_change_max: float = 3.0
+    pct_change_min: float = 3.0
+    pct_change_max: float = 5.0
     exclude_st: bool = False
     minimum_amount: float | None = Field(default=None, ge=0)
     minimum_float_market_cap: float | None = Field(default=None, ge=0)
@@ -35,9 +36,9 @@ class TailRadarScreeningConfiguration(BaseModel):
     allowed_boards: frozenset[str] | None = None
 
     @model_validator(mode="after")
-    def require_exact_v1_configuration(self) -> "TailRadarScreeningConfiguration":
-        if self.pct_change_min != 2.0 or self.pct_change_max != 3.0:
-            raise ValueError("tail-radar-screen-v1 requires the inclusive 2.00 to 3.00 range")
+    def require_versioned_configuration(self) -> "TailRadarScreeningConfiguration":
+        if (self.pct_change_min, self.pct_change_max) not in {(2.0, 3.0), (3.0, 5.0)}:
+            raise ValueError("screening requires inclusive 3.00 to 5.00 (legacy: 2.00 to 3.00)")
         if (
             self.exclude_st
             or self.minimum_amount is not None
@@ -46,8 +47,16 @@ class TailRadarScreeningConfiguration(BaseModel):
             or self.allowed_exchanges is not None
             or self.allowed_boards is not None
         ):
-            raise ValueError("optional Tail Radar filters are disabled in tail-radar-screen-v1")
+            raise ValueError("optional Tail Radar filters are disabled")
         return self
+
+    @property
+    def rule_version(self) -> str:
+        return (
+            LEGACY_TAIL_RADAR_SCREENING_RULE_VERSION
+            if self.pct_change_min == 2.0
+            else TAIL_RADAR_SCREENING_RULE_VERSION
+        )
 
 
 class TailRadarSnapshotEvidence(BaseModel):
@@ -119,8 +128,8 @@ class TailRadarScreeningDecision(BaseModel):
     reason: TailRadarDecisionReason
     observed_pct_change: float | None
     observed_price: float | None
-    inclusive_min: float = 2.0
-    inclusive_max: float = 3.0
+    inclusive_min: float = 3.0
+    inclusive_max: float = 5.0
 
     @model_validator(mode="after")
     def validate_decision_coherence(self) -> "TailRadarScreeningDecision":
@@ -168,6 +177,7 @@ class TailRadarScreeningRule:
 
     def __init__(self, configuration: TailRadarScreeningConfiguration | None = None) -> None:
         self.configuration = configuration or TailRadarScreeningConfiguration()
+        self.version = self.configuration.rule_version
 
     def evaluate(self, screening_input: TailRadarScreeningInput) -> TailRadarScreeningDecision:
         record = screening_input.record

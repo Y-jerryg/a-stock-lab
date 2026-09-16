@@ -1,7 +1,10 @@
 import { fireEvent, render, screen } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { HashRouter } from 'react-router-dom';
 import { afterEach, beforeEach, vi } from 'vitest';
 
 import { App } from './App';
+import { TailRadarPage } from '../features/tail_radar/TailRadarPage';
 
 describe('Tail Radar navigation', () => {
   beforeEach(() => {
@@ -31,7 +34,10 @@ describe('Tail Radar navigation', () => {
     expect(screen.queryByText(/stock price/i)).not.toBeInTheDocument();
   });
 
-  it('renders real overview metrics and candidate evidence from read APIs', async () => {
+  it.each([
+    ['tail-radar-screen-v1', 2, 3, 2.5, '历史规则：涨幅含边界 +2.00% 至 +3.00%'],
+    ['tail-radar-screen-v2', 3, 5, 4, '涨幅含边界 +3.00% 至 +5.00%'],
+  ])('renders saved %s thresholds and candidates', async (version, min, max, pct, label) => {
     const run = {
       run_id: '11111111-1111-4111-8111-111111111111',
       snapshot_id: '22222222-2222-4222-8222-222222222222',
@@ -40,7 +46,8 @@ describe('Tail Radar navigation', () => {
       actual_started_at: '2026-08-28T14:31:00+08:00',
       actual_finished_at: '2026-08-28T14:31:01+08:00',
       status: 'succeeded',
-      screening_rule_version: 'tail-radar-screen-v1',
+      screening_rule_version: version,
+      rule_configuration: { pct_change_min: min, pct_change_max: max },
       is_official: true,
       evaluated_record_count: 5000,
       invalid_record_count: 0,
@@ -98,7 +105,7 @@ describe('Tail Radar navigation', () => {
           board: 'shanghai_main',
           name: '浦发银行',
           price: 10.25,
-          pct_change: 2.5,
+          pct_change: pct,
           amount: 100000000,
           turnover_rate: 1.2,
           amplitude: 3.1,
@@ -135,9 +142,18 @@ describe('Tail Radar navigation', () => {
       }),
     );
 
-    render(<App />);
+    render(
+      <QueryClientProvider
+        client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+      >
+        <HashRouter>
+          <TailRadarPage />
+        </HashRouter>
+      </QueryClientProvider>,
+    );
 
     expect(await screen.findByText('浦发银行')).toBeInTheDocument();
+    expect(screen.getByText(label)).toBeInTheDocument();
     expect(screen.getByText('5,000')).toBeInTheDocument();
     expect(screen.getAllByText('已完成').length).toBeGreaterThan(0);
     expect(screen.getAllByText('沪市主板').length).toBeGreaterThan(1);

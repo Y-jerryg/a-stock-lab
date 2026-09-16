@@ -13,7 +13,6 @@ from pydantic import (
 
 from a_stock_lab.core.time import as_market_timezone
 from a_stock_lab.features.tail_radar.domain.screening import (
-    TAIL_RADAR_SCREENING_RULE_VERSION,
     TailRadarScreeningConfiguration,
     TailRadarScreeningDecision,
     TailRadarSnapshotEvidence,
@@ -72,6 +71,8 @@ class TailRadarRunData(BaseModel):
 
     @model_validator(mode="after")
     def validate_run_state(self) -> "TailRadarRunData":
+        if self.screening_rule_version != self.rule_configuration.rule_version:
+            raise ValueError("screening rule version must match its configuration")
         counts = (
             self.evaluated_record_count,
             self.invalid_record_count,
@@ -113,8 +114,8 @@ class TailRadarCandidatePayload(BaseModel):
 
     @model_validator(mode="after")
     def validate_included_evidence(self) -> "TailRadarCandidatePayload":
-        if self.screening_rule_version != TAIL_RADAR_SCREENING_RULE_VERSION:
-            raise ValueError("candidate payload uses an unsupported screening rule version")
+        if self.screening_rule_version != self.rule_configuration.rule_version:
+            raise ValueError("candidate screening rule version must match its configuration")
         if not self.decision.included:
             raise ValueError("candidate payload must represent an included decision")
         if (

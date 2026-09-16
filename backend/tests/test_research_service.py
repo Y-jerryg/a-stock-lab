@@ -74,7 +74,7 @@ def candidate_data() -> TailRadarCandidateData:
         symbol="600000",
         name="Fixture Bank",
         price=10.25,
-        pct_change=2.5,
+        pct_change=4.0,
         provider="fixture-market",
         fetched_at=CANDIDATE_AS_OF,
     )
@@ -93,7 +93,7 @@ def candidate_data() -> TailRadarCandidateData:
             decision=TailRadarScreeningDecision(
                 outcome=TailRadarDecisionOutcome.INCLUDED,
                 reason=TailRadarDecisionReason.PCT_CHANGE_IN_RANGE,
-                observed_pct_change=2.5,
+                observed_pct_change=4.0,
                 observed_price=10.25,
             ),
         ),

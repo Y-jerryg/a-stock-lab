@@ -190,7 +190,7 @@ def test_postgres_tail_radar_is_idempotent_and_persists_versioned_candidate_evid
             symbol="600000",
             name="浦发银行",
             price=10.25,
-            pct_change=2.5,
+            pct_change=4.0,
             provider="fixture",
             fetched_at=fetch_finished,
         )
@@ -220,7 +220,7 @@ def test_postgres_tail_radar_is_idempotent_and_persists_versioned_candidate_evid
                 decision=TailRadarScreeningDecision(
                     outcome=TailRadarDecisionOutcome.INCLUDED,
                     reason=TailRadarDecisionReason.PCT_CHANGE_IN_RANGE,
-                    observed_pct_change=2.5,
+                    observed_pct_change=4.0,
                     observed_price=10.25,
                 ),
             ),
