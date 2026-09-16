@@ -2,15 +2,16 @@ import json
 import logging
 import math
 import subprocess
-import sys
 import time
 import traceback
 from datetime import UTC, date, datetime
+from threading import Lock
 from typing import Any
 
 from pydantic import ValidationError
 
 from a_stock_lab.features.trend_radar.adapters.diagnostics import redact
+from a_stock_lab.features.trend_radar.adapters.process_pool import ProviderProcessPool
 from a_stock_lab.features.trend_radar.application.diagnostics import stock_context
 from a_stock_lab.features.trend_radar.config import TrendSettings
 from a_stock_lab.features.trend_radar.domain.models import Bar, Heat, ListedStock, TrendError
@@ -30,30 +31,31 @@ class AkShareTrendProvider:
         self.settings = settings
         self._calendar: tuple[date, list[date]] | None = None
         self._primary_retry_at = 0.0
+        self._primary_lock = Lock()
+        self._primary_probe = False
+        self._pace_lock = Lock()
+        self._next_request_at = 0.0
+        self._pool = ProviderProcessPool(settings.trend_fetch_workers)
+
+    def close(self) -> None:
+        self._pool.close()
+
+    def _pace(self, attempt: int) -> None:
+        if attempt:
+            time.sleep(2**attempt - 1)
+        # One global start-rate bound shared by all workers, including retries/fallbacks.
+        with self._pace_lock:
+            delay = max(0.0, self._next_request_at - time.monotonic())
+            time.sleep(delay)
+            self._next_request_at = time.monotonic() + self.settings.trend_provider_pace_seconds
 
     def _fetch(self, action: str, *args: str) -> list[dict[str, Any]]:
         for attempt in range(self.settings.trend_provider_attempts):
-            time.sleep(self.settings.trend_provider_pace_seconds + (2**attempt - 1))
+            self._pace(attempt)
             try:
-                result = subprocess.run(
-                    [
-                        sys.executable,
-                        "-X",
-                        "utf8",
-                        "-m",
-                        __package__ + ".provider_process",
-                        action,
-                        *args,
-                    ],
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=self.settings.trend_provider_timeout_seconds,
-                    check=True,
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                rows = self._pool.request(
+                    action, args, self.settings.trend_provider_timeout_seconds
                 )
-                rows = json.loads(result.stdout)
                 if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
                     raise TrendError("provider_malformed_response")
                 return rows
@@ -180,14 +182,24 @@ class AkShareTrendProvider:
         fetched_at = datetime.now(UTC)
         args = (symbol, start.strftime("%Y%m%d"), end.strftime("%Y%m%d"))
         source = "sina_daily_qfq"
-        if time.monotonic() >= self._primary_retry_at:
+        with self._primary_lock:
+            retry_at = self._primary_retry_at
+            primary = time.monotonic() >= retry_at and not self._primary_probe
+            probe = primary and retry_at > 0
+            if probe:
+                self._primary_probe = True
+        if primary:
             try:
                 rows = self._fetch("bars", *args)
                 source = "eastmoney_daily_qfq"
+                with self._primary_lock:
+                    if self._primary_retry_at == retry_at:
+                        self._primary_retry_at = 0.0
             except TrendError as exc:
                 if exc.code != "provider_error":
                     raise
-                self._primary_retry_at = time.monotonic() + 300
+                with self._primary_lock:
+                    self._primary_retry_at = time.monotonic() + 300
                 logger.warning(
                     "trend_daily_provider_fallback",
                     extra={
@@ -198,6 +210,10 @@ class AkShareTrendProvider:
                     },
                 )
                 rows = self._fetch("bars-sina", *args)
+            finally:
+                if probe:
+                    with self._primary_lock:
+                        self._primary_probe = False
         else:
             rows = self._fetch("bars-sina", *args)
         try:

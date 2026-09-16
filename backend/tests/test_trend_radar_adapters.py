@@ -1,6 +1,9 @@
 import json
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
+from itertools import pairwise
+from threading import Event, Lock
 from unittest.mock import Mock
 
 import pytest
@@ -13,13 +16,15 @@ from a_stock_lab.features.trend_radar.domain.models import TrendError
 
 def test_provider_timeout_is_bounded_and_sanitized(monkeypatch: pytest.MonkeyPatch) -> None:
     call = Mock(side_effect=subprocess.TimeoutExpired("sensitive-command", 1))
-    monkeypatch.setattr("subprocess.run", call)
+    monkeypatch.setattr(
+        "a_stock_lab.features.trend_radar.adapters.akshare.ProviderProcessPool.request", call
+    )
     monkeypatch.setattr("time.sleep", lambda _: None)
     provider = AkShareTrendProvider(TrendSettings(_env_file=None))
     with pytest.raises(TrendError, match=r"^provider_error$"):
         provider.fetch_heat()
     assert call.call_count == 3
-    assert call.call_args.kwargs["timeout"] == 60
+    assert call.call_args.args[2] == 60
 
 
 def test_provider_diagnostics_redact_auth_without_losing_traceback() -> None:
@@ -32,7 +37,10 @@ def test_provider_diagnostics_redact_auth_without_losing_traceback() -> None:
 
 
 def test_malformed_provider_response(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("subprocess.run", Mock(return_value=Mock(stdout='[{"unexpected": 1}]')))
+    monkeypatch.setattr(
+        "a_stock_lab.features.trend_radar.adapters.akshare.ProviderProcessPool.request",
+        Mock(return_value=[{"unexpected": 1}]),
+    )
     monkeypatch.setattr("time.sleep", lambda _: None)
     with pytest.raises(TrendError, match="provider_malformed_heat"):
         AkShareTrendProvider(TrendSettings(_env_file=None)).fetch_heat()
@@ -40,7 +48,10 @@ def test_malformed_provider_response(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_attention_mapping_preserves_beijing_and_st(monkeypatch: pytest.MonkeyPatch) -> None:
     rows = [{"代码": "920001", "名称": "ST Example", "关注指数": 99, "交易日": "2026-01-29"}]
-    monkeypatch.setattr("subprocess.run", Mock(return_value=Mock(stdout=json.dumps(rows))))
+    monkeypatch.setattr(
+        "a_stock_lab.features.trend_radar.adapters.akshare.ProviderProcessPool.request",
+        Mock(return_value=rows),
+    )
     monkeypatch.setattr("time.sleep", lambda _: None)
     result = AkShareTrendProvider(TrendSettings(_env_file=None)).fetch_heat()
     assert result[0].symbol == "920001" and result[0].heat_score == 99
@@ -48,7 +59,10 @@ def test_attention_mapping_preserves_beijing_and_st(monkeypatch: pytest.MonkeyPa
 
 def test_calendar_does_not_guess_outside_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
     rows = [{"trade_date": "2026-01-29"}]
-    monkeypatch.setattr("subprocess.run", Mock(return_value=Mock(stdout=json.dumps(rows))))
+    monkeypatch.setattr(
+        "a_stock_lab.features.trend_radar.adapters.akshare.ProviderProcessPool.request",
+        Mock(return_value=rows),
+    )
     monkeypatch.setattr("time.sleep", lambda _: None)
     with pytest.raises(TrendError, match="calendar_out_of_range"):
         AkShareTrendProvider(TrendSettings(_env_file=None)).sessions(date(2027, 1, 1))
@@ -58,7 +72,10 @@ def test_missing_attention_is_not_assigned_an_invented_rank(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     rows = [{"代码": "600000", "名称": "Example", "关注指数": None, "交易日": "2026-01-29"}]
-    monkeypatch.setattr("subprocess.run", Mock(return_value=Mock(stdout=json.dumps(rows))))
+    monkeypatch.setattr(
+        "a_stock_lab.features.trend_radar.adapters.akshare.ProviderProcessPool.request",
+        Mock(return_value=rows),
+    )
     monkeypatch.setattr("time.sleep", lambda _: None)
     assert AkShareTrendProvider(TrendSettings(_env_file=None)).fetch_heat() == []
 
@@ -118,19 +135,21 @@ def test_daily_fallback_preserves_bounds_and_source_and_logs_child_traceback(
             error,
             error,
             error,
-            Mock(stdout=json.dumps([row])),
-            Mock(stdout=json.dumps([row])),
+            [row],
+            [row],
         ]
     )
-    monkeypatch.setattr("subprocess.run", call)
+    monkeypatch.setattr(
+        "a_stock_lab.features.trend_radar.adapters.akshare.ProviderProcessPool.request", call
+    )
     monkeypatch.setattr("time.sleep", lambda _: None)
     provider = AkShareTrendProvider(TrendSettings(_env_file=None))
     bars = provider.fetch_bars("600000", date(2025, 12, 1), date(2026, 1, 29))
     assert bars[0].source == "sina_daily_qfq"
     assert bars[0].volume == 100 and bars[0].amount == 100000
     provider.fetch_bars("600001", date(2025, 12, 1), date(2026, 1, 29))
-    assert [call.args[0][-4] for call in call.call_args_list] == ["bars"] * 3 + ["bars-sina"] * 2
-    assert call.call_args_list[3].args[0][-3:] == ["600000", "20251201", "20260129"]
+    assert [item.args[0] for item in call.call_args_list] == ["bars"] * 3 + ["bars-sina"] * 2
+    assert call.call_args_list[3].args[1] == ("600000", "20251201", "20260129")
     logs = [row for row in caplog.records if row.message == "trend_provider_attempt_failed"]
     assert [row.__dict__["attempt"] for row in logs] == [1, 2, 3]
     assert logs[-1].__dict__["exception_type"] == "ConnectionError"
@@ -139,8 +158,10 @@ def test_daily_fallback_preserves_bounds_and_source_and_logs_child_traceback(
 
 
 def test_malformed_daily_values_are_not_hidden_by_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
-    call = Mock(return_value=Mock(stdout='[{"日期": "2026-01-29"}]'))
-    monkeypatch.setattr("subprocess.run", call)
+    call = Mock(return_value=[{"日期": "2026-01-29"}])
+    monkeypatch.setattr(
+        "a_stock_lab.features.trend_radar.adapters.akshare.ProviderProcessPool.request", call
+    )
     monkeypatch.setattr("time.sleep", lambda _: None)
     with pytest.raises(TrendError, match="provider_malformed_bars"):
         AkShareTrendProvider(TrendSettings(_env_file=None)).fetch_bars(
@@ -176,3 +197,64 @@ def test_sina_normalizes_actual_shares_to_lots(monkeypatch: pytest.MonkeyPatch) 
     sdk.assert_called_once_with(
         symbol="sh600000", start_date="20251201", end_date="20260129", adjust="qfq"
     )
+
+
+def test_recovery_allows_one_primary_probe_while_other_workers_use_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = AkShareTrendProvider(TrendSettings(_env_file=None))
+    provider._primary_retry_at = 1
+    entered, release = Event(), Event()
+    calls: list[str] = []
+    lock = Lock()
+
+    def fetch(action: str, *args: str) -> list[dict[str, object]]:
+        with lock:
+            calls.append(action)
+        if action == "bars":
+            entered.set()
+            assert release.wait(timeout=5)
+        return [
+            {
+                "日期": "2026-01-29",
+                "开盘": 10,
+                "最高": 11,
+                "最低": 9,
+                "收盘": 10,
+                "成交量": 100,
+                "成交额": 100000,
+            }
+        ]
+
+    monkeypatch.setattr(provider, "_fetch", fetch)
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        first = executor.submit(provider.fetch_bars, "600000", date(2026, 1, 1), date(2026, 1, 29))
+        try:
+            assert entered.wait(timeout=5)
+            others = [
+                executor.submit(provider.fetch_bars, symbol, date(2026, 1, 1), date(2026, 1, 29))
+                for symbol in ("600001", "600002")
+            ]
+            assert all(f.result(timeout=5)[0].source == "sina_daily_qfq" for f in others)
+        finally:
+            release.set()
+        assert first.result()[0].source == "eastmoney_daily_qfq"
+    assert calls.count("bars") == 1 and calls.count("bars-sina") == 2
+    assert provider._primary_retry_at == 0
+
+
+def test_request_pacing_is_shared_across_threads(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = AkShareTrendProvider(TrendSettings(_env_file=None, trend_provider_pace_seconds=0.3))
+    clock = [100.0]
+    starts: list[float] = []
+    monkeypatch.setattr("time.monotonic", lambda: clock[0])
+
+    def sleep(delay: float) -> None:
+        clock[0] += delay
+        starts.append(clock[0])
+
+    monkeypatch.setattr("time.sleep", sleep)
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        list(executor.map(provider._pace, [0] * 8))
+    assert len(starts) == 8
+    assert all(b - a == pytest.approx(0.3) for a, b in pairwise(starts))

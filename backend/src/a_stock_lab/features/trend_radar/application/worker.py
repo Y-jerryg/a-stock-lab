@@ -46,6 +46,7 @@ class TrendWorker:
                     logger.error("trend_worker_iteration_failed")
                 self.stop.wait(self.service.config.trend_schedule_poll_seconds)
         finally:
+            self.service.market.close()
             self.stop.set()
             pulse.join(timeout=5)
             self.heartbeat.write(self.clock(), "stopped")

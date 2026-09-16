@@ -1,10 +1,12 @@
 import logging
 from collections.abc import Callable
+from contextlib import closing
 from datetime import UTC, date, datetime, time
 from typing import Literal
 from zoneinfo import ZoneInfo
 
 from a_stock_lab.features.trend_radar.application.bar_cache import resolve_bars
+from a_stock_lab.features.trend_radar.application.collection import collect_bounded
 from a_stock_lab.features.trend_radar.application.contracts import (
     HeatProvider,
     LocalRepository,
@@ -67,6 +69,12 @@ class TrendRadarScanService:
         self.calendar, self.local, self.publisher, self.clock = calendar, local, publisher, clock
 
     def scan(self, trigger: Literal["scheduled", "cli"]) -> ScanRun | None:
+        try:
+            return self._scan(trigger)
+        finally:
+            self.market.close()
+
+    def _scan(self, trigger: Literal["scheduled", "cli"]) -> ScanRun | None:
         with self.local.lock():
             started = self.clock()
             run = ScanRun(
@@ -193,115 +201,139 @@ class TrendRadarScanService:
         failures: list[StockFailure] = []
         sources: set[str] = set()
         successful = consecutive_failures = 0
-        for index, stock in enumerate(stocks, start=1):
-            context = {
-                "run_id": str(run.id),
-                "stock_number": index,
-                "total": len(stocks),
-                "symbol": stock.symbol,
-                "stock_name": stock.name,
-            }
-            logger.info(
-                "trend_scan_progress",
-                extra=context,
-            )
-            candidate = None
-            # Database failures are global, not provider failures: keep cache IO outside
-            # the stock-error boundary so outages never become 300 skipped stocks.
-            bars = self.local.load_bars(stock.symbol, trade_date, self.clock())
-            cache_mode = "full"
-            try:
-                with scanning_stock(**context):
-                    bars, cache_mode = resolve_bars(
-                        self.market,
-                        stock.symbol,
-                        completed[-required:],
-                        bars,
-                        self.clock(),
-                        self.config.trend_cache_refresh_days,
-                    )
-                dates = [bar.trade_date for bar in bars]
-                if (
-                    dates != sorted(set(dates))
-                    or any(
-                        bar.symbol != stock.symbol or bar.trade_date > trade_date for bar in bars
-                    )
-                    or len({bar.source for bar in bars}) > 1
-                ):
-                    raise TrendError("invalid_market_sequence")
-                if not bars or bars[-1].trade_date != trade_date:
-                    raise TrendError("missing_latest_session")
-            except TrendError as exc:
-                details = exc.details
-                failure = StockFailure(
-                    symbol=stock.symbol,
-                    name=stock.name,
-                    error_code=exc.code,
-                    provider=str(details["provider"]) if details.get("provider") else None,
-                    attempt=int(str(details["attempt"])) if details.get("attempt") else None,
-                    exception_type=str(details.get("exception_type", type(exc).__name__)),
+
+        def fetch(index: int, stock: Heat) -> tuple[list[Bar], str]:
+            # Repository reads use separate sessions; database faults escape the stock boundary.
+            cached = self.local.load_bars(stock.symbol, trade_date, self.clock())
+            with scanning_stock(
+                run_id=str(run.id),
+                stock_number=index,
+                total=len(stocks),
+                symbol=stock.symbol,
+                stock_name=stock.name,
+            ):
+                return resolve_bars(
+                    self.market,
+                    stock.symbol,
+                    completed[-required:],
+                    cached,
+                    self.clock(),
+                    self.config.trend_cache_refresh_days,
                 )
-                failures.append(failure)
-                consecutive_failures += 1
-                logger.exception(
-                    "trend_scan_stock_failed",
+
+        logger.info(
+            "trend_collection_started",
+            extra={
+                "run_id": str(run.id),
+                "fetch_workers": self.config.trend_fetch_workers,
+                "total": len(stocks),
+            },
+        )
+        with closing(collect_bounded(stocks, fetch, self.config.trend_fetch_workers)) as collection:
+            for index, stock, future in collection:
+                context = {
+                    "run_id": str(run.id),
+                    "stock_number": index,
+                    "total": len(stocks),
+                    "symbol": stock.symbol,
+                    "stock_name": stock.name,
+                }
+                logger.info(
+                    "trend_scan_progress",
+                    extra=context,
+                )
+                candidate = None
+                bars: list[Bar] | None = None
+                cache_mode = "full"
+                try:
+                    bars, cache_mode = future.result()
+                    dates = [bar.trade_date for bar in bars]
+                    if (
+                        dates != sorted(set(dates))
+                        or any(
+                            bar.symbol != stock.symbol or bar.trade_date > trade_date
+                            for bar in bars
+                        )
+                        or len({bar.source for bar in bars}) > 1
+                    ):
+                        raise TrendError("invalid_market_sequence")
+                    if not bars or bars[-1].trade_date != trade_date:
+                        raise TrendError("missing_latest_session")
+                except TrendError as exc:
+                    details = exc.details
+                    failure = StockFailure(
+                        symbol=stock.symbol,
+                        name=stock.name,
+                        error_code=exc.code,
+                        provider=str(details["provider"]) if details.get("provider") else None,
+                        attempt=int(str(details["attempt"])) if details.get("attempt") else None,
+                        exception_type=str(details.get("exception_type", type(exc).__name__)),
+                    )
+                    failures.append(failure)
+                    consecutive_failures += 1
+                    logger.exception(
+                        "trend_scan_stock_failed",
+                        extra={
+                            **context,
+                            **details,
+                            "error_code": exc.code,
+                            "exception_type": failure.exception_type,
+                            "exception_message": details.get("exception_message", exc.code),
+                        },
+                    )
+                else:
+                    assert bars
+                    if cache_mode != "hit":
+                        self.local.save_bars(stock.symbol, trade_date, bars)
+                    sources.update(bar.source for bar in bars)
+                    successful += 1
+                    consecutive_failures = 0
+                    candidate, exclusion = self._candidate(stock, bars, completed, required)
+                    if exclusion:
+                        exclusions[stock.symbol] = exclusion
+                    if candidate:
+                        results.append(candidate)
+                        inputs[stock.symbol] = bars
+                run = run.model_copy(
+                    update={
+                        "successful_count": successful,
+                        "failed_count": len(failures),
+                        "failed_symbols": list(failures),
+                        "candidate_count": len(results),
+                        "strong_contraction_count": sum(
+                            row.is_strong_volume_contraction for row in results
+                        ),
+                        "exclusions": dict(exclusions),
+                        "data_as_of": self.clock(),
+                        "market_data_source": ",".join(sorted(sources)) or run.market_data_source,
+                    }
+                )
+                self.local.checkpoint(run, candidate, bars if candidate and bars else [])
+                remember(run)
+                if index % 10 == 0:
+                    try:
+                        self.publisher.publish_progress()
+                    except Exception:
+                        logger.warning(
+                            "trend_progress_export_failed", extra={"run_id": str(run.id)}
+                        )
+                logger.info(
+                    "trend_scan_stock_completed",
                     extra={
                         **context,
-                        **details,
-                        "error_code": exc.code,
-                        "exception_type": failure.exception_type,
-                        "exception_message": details.get("exception_message", exc.code),
+                        "cache_mode": cache_mode,
+                        "processed_count": successful + len(failures),
+                        "fetch_workers": self.config.trend_fetch_workers,
+                        "successful": successful,
+                        "failed": len(failures),
+                        "candidate_count": len(results),
                     },
                 )
-            else:
-                assert bars
-                if cache_mode != "hit":
-                    self.local.save_bars(stock.symbol, trade_date, bars)
-                sources.update(bar.source for bar in bars)
-                successful += 1
-                consecutive_failures = 0
-                candidate, exclusion = self._candidate(stock, bars, completed, required)
-                if exclusion:
-                    exclusions[stock.symbol] = exclusion
-                if candidate:
-                    results.append(candidate)
-                    inputs[stock.symbol] = bars
-            run = run.model_copy(
-                update={
-                    "successful_count": successful,
-                    "failed_count": len(failures),
-                    "failed_symbols": list(failures),
-                    "candidate_count": len(results),
-                    "strong_contraction_count": sum(
-                        row.is_strong_volume_contraction for row in results
-                    ),
-                    "exclusions": dict(exclusions),
-                    "data_as_of": self.clock(),
-                    "market_data_source": ",".join(sorted(sources)) or run.market_data_source,
-                }
-            )
-            self.local.checkpoint(run, candidate, bars if candidate and bars else [])
-            remember(run)
-            if index % 10 == 0:
-                try:
-                    self.publisher.publish_progress()
-                except Exception:
-                    logger.warning("trend_progress_export_failed", extra={"run_id": str(run.id)})
-            logger.info(
-                "trend_scan_stock_completed",
-                extra={
-                    **context,
-                    "cache_mode": cache_mode,
-                    "successful": successful,
-                    "failed": len(failures),
-                    "candidate_count": len(results),
-                },
-            )
-            if failures and (
-                len(failures) / len(stocks) >= self.config.trend_max_failure_ratio
-                or consecutive_failures >= self.config.trend_max_consecutive_failures
-            ):
-                raise TrendError("market_data_failure_threshold")
+                if failures and (
+                    len(failures) / len(stocks) >= self.config.trend_max_failure_ratio
+                    or consecutive_failures >= self.config.trend_max_consecutive_failures
+                ):
+                    raise TrendError("market_data_failure_threshold")
         results.sort(key=lambda row: candidate_order(row, self.config.trend_top_n))
         return (
             run.model_copy(

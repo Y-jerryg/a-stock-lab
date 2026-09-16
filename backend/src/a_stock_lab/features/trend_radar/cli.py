@@ -98,7 +98,10 @@ def main() -> None:
         else:
             worker = TrendWorker(create_service(), create_heartbeat())
             if args.command == "worker-once":
-                worker.tick()
+                try:
+                    worker.tick()
+                finally:
+                    worker.service.market.close()
             else:
                 signal.signal(signal.SIGINT, lambda *_: worker.stop.set())
                 signal.signal(signal.SIGTERM, lambda *_: worker.stop.set())

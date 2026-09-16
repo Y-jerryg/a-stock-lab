@@ -4,8 +4,39 @@ import contextlib
 import json
 import sys
 import traceback
+from multiprocessing.connection import Connection
 
 from a_stock_lab.features.trend_radar.adapters.diagnostics import redact
+
+
+def serve(connection: Connection) -> None:
+    """One interpreter handles many requests; Python imports AKShare only once."""
+    try:
+        while True:
+            try:
+                action, args = connection.recv()
+            except EOFError:
+                return
+            try:
+                with contextlib.redirect_stdout(sys.stderr):
+                    frame = fetch_frame(action, list(args))
+                # Preserve the same JSON-compatible normalization as the one-shot protocol.
+                rows = json.loads(json.dumps(frame.to_dict(orient="records"), default=str))
+                connection.send({"rows": rows})
+            except Exception as exc:
+                connection.send({"error": error_details(exc)})
+    finally:
+        connection.close()
+
+
+def error_details(exc: Exception) -> dict[str, str]:
+    request = getattr(exc, "request", None)
+    return {
+        "exception_type": type(exc).__name__,
+        "exception_message": redact(str(exc)),
+        "url": redact(str(getattr(request, "url", ""))),
+        "provider_traceback": redact(traceback.format_exc()),
+    }
 
 
 def fetch_frame(action: str, args: list[str]):  # type: ignore[no-untyped-def]
@@ -56,17 +87,9 @@ def main() -> None:
             json.dumps(frame.to_dict(orient="records"), default=str, ensure_ascii=True)
         )
     except Exception as exc:
-        request = getattr(exc, "request", None)
         sys.stdout.write(
             json.dumps(
-                {
-                    "error": {
-                        "exception_type": type(exc).__name__,
-                        "exception_message": redact(str(exc)),
-                        "url": redact(str(getattr(request, "url", ""))),
-                        "provider_traceback": redact(traceback.format_exc()),
-                    }
-                },
+                {"error": error_details(exc)},
                 ensure_ascii=True,
             )
         )

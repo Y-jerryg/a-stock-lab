@@ -114,6 +114,9 @@ class Memory:
     def fetch_heat(self) -> list[Heat]:
         return self.heat
 
+    def close(self) -> None:
+        pass
+
     def fetch_universe(self) -> list[ListedStock]:
         return [ListedStock(symbol=row.symbol, name=row.name, fetched_at=NOW) for row in self.heat]
 
@@ -286,7 +289,7 @@ def test_three_stock_failures_keep_297_results_and_detailed_logs(
 def test_widespread_failure_stops_and_keeps_prior_checkpoints() -> None:
     memory = Batch({f"600{i:03}" for i in range(128, 300)})
     scanner = service(memory)
-    scanner.config = TrendSettings(_env_file=None)
+    scanner.config = TrendSettings(_env_file=None, trend_fetch_workers=1)
     run = scanner.scan("cli")
     assert run and run.status == "failed" and run.error_message == "market_data_failure_threshold"
     assert run.successful_count == 128 and run.failed_count == 10
@@ -299,7 +302,7 @@ def test_widespread_failure_stops_and_keeps_prior_checkpoints() -> None:
 def test_scattered_failures_use_requested_universe_for_threshold() -> None:
     memory = Batch({f"600{i:03}" for i in range(0, 300, 4)})
     scanner = service(memory)
-    scanner.config = TrendSettings(_env_file=None)
+    scanner.config = TrendSettings(_env_file=None, trend_fetch_workers=1)
     run = scanner.scan("cli")
     assert run and run.status == "failed"
     assert run.failed_count == 60 and run.successful_count == 177
@@ -327,7 +330,7 @@ def test_cli_partial_completion_is_a_successful_command(
 def test_database_failure_is_global_not_a_skipped_stock(monkeypatch: pytest.MonkeyPatch) -> None:
     memory = Batch(set())
     scanner = service(memory)
-    scanner.config = TrendSettings(_env_file=None)
+    scanner.config = TrendSettings(_env_file=None, trend_fetch_workers=1)
 
     def broken_cache(symbol: str, vintage: date, now: datetime) -> None:
         if symbol == "600001":

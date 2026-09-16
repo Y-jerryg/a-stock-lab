@@ -24,6 +24,7 @@ class TrendSettings(BaseSettings):
     trend_provider_timeout_seconds: float = Field(default=60, gt=0, le=300)
     trend_provider_attempts: int = Field(default=3, ge=1, le=5)
     trend_provider_pace_seconds: float = Field(default=0.3, ge=0, le=30)
+    trend_fetch_workers: int = Field(default=4, ge=1, le=8)
     trend_max_failure_ratio: float = Field(default=0.2, gt=0, le=1)
     trend_max_consecutive_failures: int = Field(default=10, ge=1)
     trend_cache_refresh_days: int = Field(default=7, ge=1, le=30)

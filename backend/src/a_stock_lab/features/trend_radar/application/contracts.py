@@ -22,6 +22,7 @@ class HeatProvider(Protocol):
 
 class MarketDataProvider(Protocol):
     def fetch_bars(self, symbol: str, start: date, end: date) -> list[Bar]: ...
+    def close(self) -> None: ...
 
 
 class TradingCalendarProvider(Protocol):

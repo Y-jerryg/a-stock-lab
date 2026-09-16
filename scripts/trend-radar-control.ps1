@@ -111,11 +111,16 @@ $timer.Add_Tick({
         $script:taskProcess = $null
         foreach ($button in $script:buttons) { $button.Enabled = $true }
     } elseif ($script:taskName -eq 'Scan') {
-        $progressLine = $lines | Where-Object { $_ -match '"stock_number"' } | Select-Object -Last 1
+        $progressLine = $lines | Where-Object { $_ -match '"message":\s*"trend_scan_stock_completed"' } | Select-Object -Last 1
+        if (-not $progressLine) { $progressLine = $lines | Where-Object { $_ -match '"stock_number"' } | Select-Object -Last 1 }
         if ($progressLine) {
             try {
                 $progress = $progressLine | ConvertFrom-Json
-                $status.Text = "正在处理 $($progress.stock_number) / $($progress.total)：$($progress.symbol) $($progress.stock_name)。请保持电脑唤醒；个别股票失败会继续处理。"
+                if ($null -ne $progress.processed_count) {
+                    $status.Text = "已处理 $($progress.processed_count) / $($progress.total)，$($progress.fetch_workers) 路并发；最近处理 $($progress.symbol) $($progress.stock_name)。成功 $($progress.successful)，失败 $($progress.failed)。"
+                } else {
+                    $status.Text = "正在处理 $($progress.stock_number) / $($progress.total)：$($progress.symbol) $($progress.stock_name)。请保持电脑唤醒；个别股票失败会继续处理。"
+                }
             } catch { }
         }
     }
