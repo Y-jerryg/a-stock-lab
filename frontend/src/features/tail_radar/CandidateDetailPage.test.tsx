@@ -5,6 +5,8 @@ import { afterEach, vi } from 'vitest';
 
 import { CandidateDetailPage } from './CandidateDetailPage';
 
+vi.mock('./DailyChartPanel', () => ({ DailyChartPanel: () => <div>日 K 线与成交量</div> }));
+
 vi.mock('./IntradayChart', () => ({
   IntradayChart: () => <div role="img" aria-label="测试用日内分时图" />,
 }));

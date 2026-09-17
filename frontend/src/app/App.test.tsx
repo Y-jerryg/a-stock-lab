@@ -1,10 +1,13 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { HashRouter } from 'react-router-dom';
+import { HashRouter, Routes, Route } from 'react-router-dom';
 import { afterEach, beforeEach, vi } from 'vitest';
 
 import { App } from './App';
+import { CandidateDetailPage } from '../features/tail_radar/CandidateDetailPage';
 import { TailRadarPage } from '../features/tail_radar/TailRadarPage';
+
+vi.mock('../features/tail_radar/DailyChartPanel', () => ({ DailyChartPanel: () => null }));
 
 describe('Tail Radar navigation', () => {
   beforeEach(() => {
@@ -126,13 +129,35 @@ describe('Tail Radar navigation', () => {
       page: 1,
       page_size: 100,
     };
+    const baseCandidate = candidatePage.items[0];
+    if (!baseCandidate) throw new Error('Missing candidate fixture');
+    candidatePage.items = Array.from({ length: 30 }, (_, i) => ({
+      ...baseCandidate,
+      candidate_id: `55555555-5555-4555-8555-${String(i).padStart(12, '0')}`,
+      symbol: String(600000 + i),
+      name: i === 0 ? '浦发银行' : `样例${String(i)}`,
+    }));
+    candidatePage.total = 30;
     vi.stubGlobal(
       'fetch',
       vi.fn().mockImplementation((input: RequestInfo | URL) => {
         const inputUrl =
           input instanceof Request ? input.url : input instanceof URL ? input.href : input;
         const path = new URL(inputUrl, 'http://localhost').pathname;
-        const payload = path.endsWith('/candidates') ? candidatePage : responses[path];
+        const payload = path.endsWith('/candidates')
+          ? candidatePage
+          : path.includes('/candidates/')
+            ? {
+                ...baseCandidate,
+                trade_date: run.trade_date,
+                snapshot_data: { price: 10, pct_change: 4 },
+                snapshot_evidence: {},
+                rule_configuration: run.rule_configuration,
+                intraday_analysis: null,
+                web_research: null,
+                workflow_state: null,
+              }
+            : responses[path];
         return Promise.resolve(
           new Response(JSON.stringify(payload), {
             status: 200,
@@ -147,7 +172,10 @@ describe('Tail Radar navigation', () => {
         client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
       >
         <HashRouter>
-          <TailRadarPage />
+          <Routes>
+            <Route path="/tail-radar" element={<TailRadarPage />} />
+            <Route path="/tail-radar/candidates/:candidateId" element={<CandidateDetailPage />} />
+          </Routes>
         </HashRouter>
       </QueryClientProvider>,
     );
@@ -159,8 +187,13 @@ describe('Tail Radar navigation', () => {
     expect(screen.getAllByText('沪市主板').length).toBeGreaterThan(1);
     expect(screen.getByRole('link', { name: '600000' })).toHaveAttribute(
       'href',
-      '#/tail-radar/candidates/55555555-5555-4555-8555-555555555555',
+      '#/tail-radar/candidates/55555555-5555-4555-8555-000000000000',
     );
+    fireEvent.click(screen.getByRole('button', { name: '下一页' }));
+    fireEvent.click(screen.getByRole('link', { name: '600025' }));
+    fireEvent.click(await screen.findByRole('link', { name: '返回尾盘雷达' }));
+    expect(await screen.findByRole('link', { name: '600025' })).toBeInTheDocument();
+    expect(screen.getByText('第 2 页，共 2 页')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('上市板块'), { target: { value: 'star' } });
     expect(screen.queryByRole('link', { name: '600000' })).not.toBeInTheDocument();
     expect(screen.getByText('没有符合当前条件的候选标的')).toBeInTheDocument();

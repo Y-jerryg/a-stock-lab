@@ -1,7 +1,8 @@
+import { DailyChartPanel } from './DailyChartPanel';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, ExternalLink, LockKeyhole, ShieldCheck, Sparkles } from 'lucide-react';
 import { lazy, Suspense, useState, type ReactNode, type SyntheticEvent } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 
 import { PageHeader } from '../../components/PageHeader';
 import { Badge } from '../../components/ui/badge';
@@ -32,6 +33,7 @@ const IntradayChart = lazy(async () => {
 });
 
 export function CandidateDetailPage() {
+  const location = useLocation();
   const { candidateId = '' } = useParams();
   const query = useQuery({
     ...tailRadarCandidateQuery(candidateId),
@@ -56,7 +58,7 @@ export function CandidateDetailPage() {
   return (
     <div>
       <Link
-        to="/tail-radar"
+        to={`/tail-radar${location.search}`}
         className="mb-4 inline-flex items-center gap-2 text-xs font-medium text-[var(--text-muted)] hover:text-[var(--accent)]"
       >
         <ArrowLeft className="size-3.5" /> 返回尾盘雷达
@@ -130,6 +132,8 @@ export function CandidateDetailPage() {
           </CardContent>
         </Card>
       </section>
+
+      <DailyChartPanel candidateId={candidateId} symbol={candidate.symbol} />
 
       <section className="mt-5" aria-labelledby="deterministic-title">
         <Card>

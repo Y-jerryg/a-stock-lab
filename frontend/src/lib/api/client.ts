@@ -22,6 +22,8 @@ const errorCodeMessages: Record<string, string> = {
   research_provider_unavailable: 'OpenAI 服务当前不可用，请稍后再试。',
   research_provider_api_error: 'OpenAI 拒绝了请求参数；请稍后重试，若仍失败请联系站点管理员。',
   research_provider_invalid_response: 'AI 返回内容未通过结构或时点完整性校验。',
+  daily_chart_busy: '日 K 数据服务正忙，请稍后点击重新加载。',
+  daily_chart_unavailable: '日线行情源暂时不可用，请稍后重试。其他快照数据仍可查看。',
   validation_error: '请求参数无效。',
 };
 
@@ -50,10 +52,19 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   headers.set('Accept', 'application/json');
 
-  const response = await fetch(`${configuredBaseUrl}${path}`, {
-    ...init,
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${configuredBaseUrl}${path}`, { ...init, headers });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') throw error;
+    throw new ApiError(
+      configuredBaseUrl
+        ? '无法连接网站的数据服务。运营者需保持电脑和 Docker 在线，并重新点击“启动公网网站”恢复连接。'
+        : '无法连接本机数据服务。请确认 Docker 已启动，并点击“启动本机服务”。',
+      0,
+      'network_unavailable',
+    );
+  }
 
   if (!response.ok) {
     let payload: ApiErrorEnvelope = {};

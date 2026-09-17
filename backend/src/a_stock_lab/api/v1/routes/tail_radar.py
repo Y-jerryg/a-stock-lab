@@ -15,9 +15,18 @@ from a_stock_lab.api.v1.schemas.tail_radar import (
     TailRadarSnapshotMetricsResponse,
     TailRadarWorkflowResponse,
 )
-from a_stock_lab.api.v1.services.tail_radar import get_tail_radar_query_service
+from a_stock_lab.api.v1.services.tail_radar import (
+    get_daily_chart_service,
+    get_tail_radar_query_service,
+)
 from a_stock_lab.core.config import Settings, get_settings
+from a_stock_lab.features.tail_radar.application.daily_chart import (
+    ChartBusyError,
+    DailyChart,
+    DailyChartService,
+)
 from a_stock_lab.features.tail_radar.application.queries import TailRadarQueryService
+from a_stock_lab.features.trend_radar.domain.models import TrendError
 
 router = APIRouter(prefix="/tail-radar", tags=["tail-radar"])
 QueryService = Annotated[TailRadarQueryService, Depends(get_tail_radar_query_service)]
@@ -144,3 +153,26 @@ def candidate_detail(
         service.get_latest_research(candidate_id),
         service.get_candidate_workflow_state(candidate_id),
     )
+
+
+@router.get("/candidates/{candidate_id}/daily-chart", response_model=DailyChart)
+def candidate_daily_chart(
+    candidate_id: UUID,
+    service: QueryService,
+    charts: Annotated[DailyChartService, Depends(get_daily_chart_service)],
+) -> DailyChart:
+    candidate = service.get_candidate(candidate_id)
+    if candidate is None:
+        raise ApplicationError(
+            code="tail_radar_candidate_not_found", message="Candidate not found.", status_code=404
+        )
+    try:
+        return charts.read(candidate.symbol, candidate.as_of)
+    except ChartBusyError:
+        raise ApplicationError(
+            code="daily_chart_busy", message="Chart collection is busy.", status_code=429
+        ) from None
+    except TrendError:
+        raise ApplicationError(
+            code="daily_chart_unavailable", message="Daily quotes unavailable.", status_code=503
+        ) from None

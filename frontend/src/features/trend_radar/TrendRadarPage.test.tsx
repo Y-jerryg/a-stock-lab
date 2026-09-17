@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { TrendStockDetailPage } from './TrendStockDetailPage';
 import { TrendRadarPage } from './TrendRadarPage';
 import { marketTime } from './format';
 import type { Result, Run } from './api';
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('./api', () => ({
   readDashboard: mocks.dashboard,
   readResults: mocks.results,
+  readRunDetails: () => Promise.resolve(null),
 }));
 
 const run: Run = {
@@ -77,6 +79,7 @@ function mount(component: React.ReactNode) {
 }
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
   mocks.dashboard.mockResolvedValue({ latest: run, attempts: [run], workers: [] });
   mocks.results.mockResolvedValue([stock]);
 });
@@ -213,4 +216,33 @@ describe('Trend Radar', () => {
       screen.queryByText('最近一次扫描失败，当前仍展示最近一次成功结果。'),
     ).not.toBeInTheDocument();
   });
+});
+
+it('returns from a detail to the same page and filters, including after remount', async () => {
+  const current = { ...run, id: '11111111-1111-4111-8111-111111111111' };
+  mocks.dashboard.mockResolvedValue({ latest: current, attempts: [current], workers: [] });
+  mocks.results.mockResolvedValue(
+    Array.from({ length: 65 }, (_, i) => ({
+      ...stock,
+      symbol: String(600000 + i),
+      name: `候选${String(i)}`,
+    })),
+  );
+  mount(
+    <Routes>
+      <Route path="/" element={<TrendRadarPage />} />
+      <Route path="/trend-radar" element={<TrendRadarPage />} />
+      <Route path="/trend-radar/runs/:runId/stocks/:symbol" element={<TrendStockDetailPage />} />
+    </Routes>,
+  );
+  expect(await screen.findByText('候选0')).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText('回调（反弹）天数'), { target: { value: '2' } });
+  fireEvent.click(screen.getByRole('button', { name: '下一页' }));
+  fireEvent.click(screen.getByRole('link', { name: '候选30' }));
+  fireEvent.click(await screen.findByRole('link', { name: /返回本次扫描结果/ }));
+  expect(await screen.findByText('候选30')).toBeInTheDocument();
+  expect(screen.queryByText('候选0')).not.toBeInTheDocument();
+  expect(screen.getByLabelText('回调（反弹）天数')).toHaveValue('2');
+  fireEvent.change(screen.getByLabelText('回调（反弹）天数'), { target: { value: 'all' } });
+  expect(screen.getByText('候选0')).toBeInTheDocument();
 });

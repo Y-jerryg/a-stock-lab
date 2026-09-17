@@ -539,3 +539,32 @@ def test_on_demand_research_requires_user_key_and_targets_one_candidate(app: Fas
     assert authorized.status_code == 200
     assert authorized.json()["candidate_id"] == str(CANDIDATE_ID)
     assert fake.calls == [(CANDIDATE_ID, False)]
+
+
+def test_daily_chart_read_validates_identity_and_reports_capacity(
+    app: FastAPI, client: TestClient
+) -> None:
+    from unittest.mock import Mock
+
+    from a_stock_lab.api.v1.services.tail_radar import get_daily_chart_service
+    from a_stock_lab.features.tail_radar.application.daily_chart import ChartBusyError, DailyChart
+
+    override_service(app)
+    charts = Mock()
+    charts.read.return_value = DailyChart(
+        symbol="600000", cutoff=INTENDED.date(), fetched_at=INTENDED, bars=[]
+    )
+    app.dependency_overrides[get_daily_chart_service] = lambda: charts
+    unknown = client.get(
+        "/api/v1/tail-radar/candidates/ffffffff-ffff-ffff-ffff-ffffffffffff/daily-chart"
+    )
+    assert unknown.status_code == 404
+    charts.read.assert_not_called()
+    response = client.get(f"/api/v1/tail-radar/candidates/{CANDIDATE_ID}/daily-chart")
+    assert response.status_code == 200
+    assert response.json()["purpose"] == "reference_only"
+    charts.read.assert_called_once_with(candidate_data().symbol, candidate_data().as_of)
+    charts.read.side_effect = ChartBusyError()
+    assert (
+        client.get(f"/api/v1/tail-radar/candidates/{CANDIDATE_ID}/daily-chart").status_code == 429
+    )

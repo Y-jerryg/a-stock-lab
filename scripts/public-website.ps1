@@ -41,28 +41,35 @@ try {
     $health = Invoke-RestMethod 'http://localhost:8080/api/v1/health' -TimeoutSec 10
     if ($health.database.status -ne 'available') { throw '本机数据库不可用，请先在趋势雷达窗口准备本地环境。' }
     $availability = Invoke-RestMethod 'http://localhost:8080/api/v1/tail-radar/research-availability' -TimeoutSec 10
-    if (-not $availability.enabled) { throw '请先在 .env 开启 TAIL_RADAR_ON_DEMAND_RESEARCH_ENABLED 并更新本地后端。' }
+    if (-not $availability.enabled) { Write-Output 'AI 分析未开启；公网仍可查看尾盘结果和图表。' }
     Write-Output "正在连接本机后端，访客网站：$pagesUrl"
     Write-Output (Invoke-External 'docker' ($compose + @('up', '-d', '--no-deps', 'public-api')))
     Write-Output (Invoke-External 'docker' ($compose + @('up', '-d', 'public-tunnel')))
-    $containerId = (Invoke-External 'docker' ($compose + @('ps', '-q', 'public-tunnel'))).Trim()
-    $startedAt = (Invoke-External 'docker' @('inspect', '--format', '{{.State.StartedAt}}', $containerId)).Trim()
-    $apiUrl = $null
-    for ($attempt = 0; $attempt -lt 40; $attempt++) {
-        $tunnelLog = Invoke-External 'docker' @('logs', '--since', $startedAt, $containerId)
-        $urls = [regex]::Matches($tunnelLog, 'https://[a-z0-9-]+\.trycloudflare\.com')
-        if ($urls.Count) { $apiUrl = $urls[$urls.Count - 1].Value; break }
-        Start-Sleep -Seconds 3
-    }
-    if (-not $apiUrl) { throw '未获取到 HTTPS 隧道地址，请检查 Docker 隧道日志和网络。' }
-    Write-Output "正在检查公网连接：$apiUrl"
     $ready = $false
-    for ($attempt = 0; $attempt -lt 20; $attempt++) {
-        try {
-            $publicHealth = Invoke-RestMethod "$apiUrl/api/v1/health" -Headers @{Origin=$env:PUBLIC_PAGES_ORIGIN} -TimeoutSec 10
-            if ($publicHealth.database.status -eq 'available') { $ready = $true; break }
-        } catch { }
-        Start-Sleep -Seconds 3
+    for ($round = 0; $round -lt 2 -and -not $ready; $round++) {
+        if ($round -eq 1) {
+            Write-Output '现有公网连接已失效，正在重建隧道……'
+            Write-Output (Invoke-External 'docker' ($compose + @('up', '-d', '--force-recreate', 'public-tunnel')))
+        }
+        $containerId = (Invoke-External 'docker' ($compose + @('ps', '-q', 'public-tunnel'))).Trim()
+        $startedAt = (Invoke-External 'docker' @('inspect', '--format', '{{.State.StartedAt}}', $containerId)).Trim()
+        $apiUrl = $null
+        for ($attempt = 0; $attempt -lt 40; $attempt++) {
+            $tunnelLog = Invoke-External 'docker' @('logs', '--since', $startedAt, $containerId)
+            $urls = [regex]::Matches($tunnelLog, 'https://[a-z0-9-]+\.trycloudflare\.com')
+            if ($urls.Count) { $apiUrl = $urls[$urls.Count - 1].Value; break }
+            Start-Sleep -Seconds 3
+        }
+        if (-not $apiUrl) { continue }
+        Write-Output "正在检查公网连接：$apiUrl"
+        $checks = if ($round -eq 0) { 3 } else { 20 }
+        for ($attempt = 0; $attempt -lt $checks; $attempt++) {
+            try {
+                $publicHealth = Invoke-RestMethod "$apiUrl/api/v1/health" -Headers @{Origin=$env:PUBLIC_PAGES_ORIGIN} -TimeoutSec 10
+                if ($publicHealth.database.status -eq 'available') { $ready = $true; break }
+            } catch { }
+            Start-Sleep -Seconds 3
+        }
     }
     if (-not $ready) { throw '公网连接暂不可用；没有更改网站的后端地址。稍后重新运行本程序。' }
     $preflight = Invoke-WebRequest -UseBasicParsing -Method Options -Uri "$apiUrl/api/internal/v1/tail-radar/candidates/00000000-0000-0000-0000-000000000000/research" -Headers @{

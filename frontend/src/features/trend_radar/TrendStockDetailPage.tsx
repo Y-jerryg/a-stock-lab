@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { lazy, Suspense, useEffect } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { readRunDetails } from './api';
 import { isMildRebound, marketTime, percent } from './format';
 import './trend.css';
@@ -35,6 +35,7 @@ function Metrics({ items }: { items: [string, string | number][] }) {
 }
 
 export function TrendStockDetailPage() {
+  const location = useLocation();
   const { runId = '', symbol = '' } = useParams();
   useEffect(() => {
     window.scrollTo(0, 0);
@@ -49,7 +50,14 @@ export function TrendStockDetailPage() {
     staleTime: Infinity,
   });
   const back = (
-    <Link className="trend-back" to={validIdentity ? `/trend-radar?run=${runId}` : '/trend-radar'}>
+    <Link
+      className="trend-back"
+      to={
+        validIdentity
+          ? `/trend-radar?${new URLSearchParams({ ...Object.fromEntries(new URLSearchParams(location.search)), run: runId }).toString()}`
+          : '/trend-radar'
+      }
+    >
       ← 返回本次扫描结果
     </Link>
   );

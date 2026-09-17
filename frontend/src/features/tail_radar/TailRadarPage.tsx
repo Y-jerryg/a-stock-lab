@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { ChevronLeft, ChevronRight, Search, SlidersHorizontal } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useMemo } from 'react';
+import { useListParameter } from '../../lib/useListParameter';
+import { Link, useLocation } from 'react-router-dom';
 
 import { PageHeader } from '../../components/PageHeader';
 import { Button } from '../../components/ui/button';
@@ -33,14 +34,20 @@ export function TailRadarPage() {
   const runId = latest.data?.run_id ?? '';
   const summary = useQuery({ ...tailRadarRunSummaryQuery(runId), enabled: Boolean(runId) });
   const candidates = useQuery({ ...tailRadarCandidatesQuery(runId), enabled: Boolean(runId) });
-  const [search, setSearch] = useState('');
-  const [sortKey, setSortKey] = useState<SortKey>('pct_change');
-  const [descending, setDescending] = useState(true);
-  const [technicalFilter, setTechnicalFilter] = useState<StageStatus | 'all'>('all');
-  const [researchFilter, setResearchFilter] = useState<StageStatus | 'all'>('all');
-  const [boardFilter, setBoardFilter] = useState<AShareBoard | 'all'>('all');
-  const [density, setDensity] = useState<Density>('compact');
-  const [page, setPage] = useState(1);
+  const [search, setSearch] = useListParameter<string>('search', '');
+  const [sortKey, setSortKey] = useListParameter<SortKey>('sortKey', 'pct_change');
+  const [descending, setDescending] = useListParameter<boolean>('descending', true);
+  const [technicalFilter, setTechnicalFilter] = useListParameter<StageStatus | 'all'>(
+    'technicalFilter',
+    'all',
+  );
+  const [researchFilter, setResearchFilter] = useListParameter<StageStatus | 'all'>(
+    'researchFilter',
+    'all',
+  );
+  const [boardFilter, setBoardFilter] = useListParameter<AShareBoard | 'all'>('boardFilter', 'all');
+  const [density, setDensity] = useListParameter<Density>('density', 'compact');
+  const [requestedPage, setPage] = useListParameter<number>('page', 1);
   const pageSize = density === 'compact' ? 25 : 15;
 
   const filtered = useMemo(() => {
@@ -60,10 +67,8 @@ export function TailRadarPage() {
     return values.sort((left, right) => compareCandidate(left, right, sortKey, descending));
   }, [boardFilter, candidates.data, descending, researchFilter, search, sortKey, technicalFilter]);
 
-  useEffect(() => {
-    setPage(1);
-  }, [search, boardFilter, technicalFilter, researchFilter, density]);
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const page = Math.min(requestedPage, pageCount);
   const visible = filtered.slice((page - 1) * pageSize, page * pageSize);
 
   if (latest.isLoading) return <OverviewSkeleton />;
@@ -268,6 +273,7 @@ function CandidateTable({
   candidates: TailRadarCandidateSummary[];
   density: Density;
 }) {
+  const location = useLocation();
   const cellPadding = density === 'compact' ? 'py-2.5' : 'py-4';
   const headers = [
     '证券',
@@ -307,7 +313,7 @@ function CandidateTable({
             >
               <td className={`px-4 ${cellPadding}`}>
                 <Link
-                  to={`/tail-radar/candidates/${candidate.candidate_id}`}
+                  to={`/tail-radar/candidates/${candidate.candidate_id}${location.search}`}
                   className="font-semibold hover:text-[var(--accent)] hover:underline"
                 >
                   {candidate.symbol}

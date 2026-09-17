@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { useListParameter } from '../../lib/useListParameter';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { text } from '../../locales';
 import { readDashboard, readResults, type Result } from './api';
 import { isMildRebound, marketTime, percent } from './format';
@@ -9,8 +9,9 @@ import './trend.css';
 const t = text.trend;
 
 function StockCard({ stock, runId, topN }: { stock: Result; runId: string; topN: number }) {
+  const location = useLocation();
   const popular = stock.heat_rank > 0 && stock.heat_rank <= topN;
-  const detailPath = `/trend-radar/runs/${runId}/stocks/${stock.symbol}`;
+  const detailPath = `/trend-radar/runs/${runId}/stocks/${stock.symbol}${location.search}`;
   const metrics = [
     [t.rank, stock.heat_rank > 0 ? `#${String(stock.heat_rank)}` : '暂无关注度排名'],
     [t.days, t.trendLabel(stock.trend_days)],
@@ -79,13 +80,12 @@ export function TrendRadarPage() {
   const select = (value: string) => {
     setSearchParams(value ? { run: value } : {});
   };
-  const [strong, setStrong] = useState(false);
-  const [mild, setMild] = useState(false);
-  const [rebounds, setRebounds] = useState('all');
-  const [days, setDays] = useState(0);
-  const [search, setSearch] = useState('');
-  const [page, setPage] = useState(1);
-  const [pageContext, setPageContext] = useState('');
+  const [strong, setStrong] = useListParameter<boolean>('strong', false);
+  const [mild, setMild] = useListParameter<boolean>('mild', false);
+  const [rebounds, setRebounds] = useListParameter<string>('rebounds', 'all');
+  const [days, setDays] = useListParameter<number>('days', 0);
+  const [search, setSearch] = useListParameter<string>('search', '');
+  const [page, setPage] = useListParameter<number>('page', 1);
   const pageSize = 30;
   const dashboard = useQuery({
     queryKey: ['trend-dashboard'],
@@ -112,12 +112,10 @@ export function TrendRadarPage() {
         (!days || row.trend_days === days) &&
         `${row.symbol} ${row.name}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()),
     ) ?? [];
-  const context = `${run?.id ?? ''}|${String(strong)}|${String(mild)}|${rebounds}|${String(days)}|${search}`;
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
-  const currentPage = context === pageContext ? Math.min(page, pageCount) : 1;
+  const currentPage = Math.min(page, pageCount);
   const visible = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
   const selectPage = (next: number) => {
-    setPageContext(context);
     setPage(next);
   };
   const config = run?.payload.configuration_snapshot;
